@@ -57,8 +57,12 @@ class BackendTester:
             else:
                 raise ValueError(f"Unsupported method: {method}")
             
+            print(f"DEBUG: {method} {url} -> Status: {response.status_code}")
+            if response.status_code >= 400:
+                print(f"DEBUG: Response: {response.text}")
             return response
         except requests.exceptions.RequestException as e:
+            print(f"DEBUG: Request exception: {str(e)}")
             return None, str(e)
     
     def test_user_registration(self):
