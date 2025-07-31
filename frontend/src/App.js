@@ -561,8 +561,16 @@ const Dashboard = ({ user, onLogout }) => {
   useEffect(() => {
     fetchDashboardData();
     fetchTasks();
-    fetchUserNotifications(); // Fetch user notifications on component mount
+    // Initial fetch of user notifications on component mount
+    fetchUserNotifications(); 
   }, [user.is_activated]); // Re-fetch if activation status changes or user data changes
+
+  // New useEffect specifically for when navigating to the notifications tab
+  useEffect(() => {
+    if (currentPage === 'notifications') {
+      fetchUserNotifications(); // Ensure notifications are fresh when tab is opened
+    }
+  }, [currentPage]); // Dependency on currentPage
 
   const fetchDashboardData = async () => {
     try {
@@ -623,12 +631,14 @@ const Dashboard = ({ user, onLogout }) => {
         },
       });
       const data = await response.json();
+      console.log("Fetched notifications:", data); // Log to see what's coming from backend
       if (data.success) {
         setUserNotifications(data.notifications);
       } else {
         showNotification({ title: 'Error', message: data.detail || 'Failed to fetch notifications', type: 'error' });
       }
     } catch (error) {
+      console.error('Error fetching user notifications:', error); // Log network errors
       showNotification({ title: 'Error', message: 'Network error fetching notifications.', type: 'error' });
     }
   };
