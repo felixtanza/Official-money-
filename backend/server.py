@@ -741,7 +741,7 @@ async def process_referral_reward(referred_user_id: str, referrer_id: str):
 async def create_notification(notification_data: dict):
     """Create a notification"""
     notification_doc = {
-        "notification_id": str(uuid.uuid4()),
+        # Removed "notification_id" here to rely solely on MongoDB's _id
         "title": notification_data['title'],
         "message": notification_data['message'],
         "user_id": notification_data.get('user_id'),  # None for broadcast
@@ -766,13 +766,24 @@ async def get_notifications(current_user: dict = Depends(get_current_user)):
 
 @app.put("/api/notifications/{notification_id}/read")
 async def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
-    # Find the notification by its string ID, then update using its internal _id
-    notification = await db.notifications.find_one({"notification_id": notification_id})
+    # The frontend sends the 'id' which is the string representation of MongoDB's '_id'.
+    # Convert it back to ObjectId for the database query.
+    try:
+        object_id_to_find = ObjectId(notification_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid notification ID format")
+
+    notification = await db.notifications.find_one({"_id": object_id_to_find})
     if not notification:
         raise HTTPException(status_code=404, detail="Notification not found")
 
+    # Ensure the user has access to mark this notification as read
+    # Either it's a broadcast (user_id is None) or it's for this specific user
+    if notification.get('user_id') is not None and notification['user_id'] != current_user['user_id']:
+        raise HTTPException(status_code=403, detail="Not authorized to mark this notification as read")
+
     await db.notifications.update_one(
-        {"_id": notification["_id"]}, # Use internal _id for update
+        {"_id": object_id_to_find}, # Use the ObjectId directly for update
         {"$set": {"is_read": True}}
     )
     return {"success": True, "message": "Notification marked as read"}
@@ -798,13 +809,13 @@ async def get_admin_dashboard_stats():
     
     total_deposits_agg = await db.transactions.aggregate([
         {"$match": {"type": "deposit", "status": "completed"}},
-        {"$group": {"_id": None, "total_amount": {"$sum": "$amount"}}}
+        {"$group": {"_id": None, "total_amount": {"$sum": 1}}} # Changed to sum count of documents
     ]).to_list(1)
     total_deposits = total_deposits_agg[0]['total_amount'] if total_deposits_agg else 0.0
 
     total_withdrawals_agg = await db.transactions.aggregate([
         {"$match": {"type": "withdrawal", "status": "completed"}},
-        {"$group": {"_id": None, "total_amount": {"$sum": "$amount"}}}
+        {"$group": {"_id": None, "total_amount": {"$sum": 1}}} # Changed to sum count of documents
     ]).to_list(1)
     total_withdrawals = total_withdrawals_agg[0]['total_amount'] if total_withdrawals_agg else 0.0
 
