@@ -1208,15 +1208,15 @@ const AdminWithdrawalsComponent = () => {
                       </button>
                     </>
                   )}
-                  {(withdrawal.status === 'approved' || withdrawal.status === 'processing') && (
+                  {(withdrawal.status === 'approved' || withdrawal.status === 'processing') &&
                      <span className="status-badge processing">Processing</span>
-                  )}
-                  {withdrawal.status === 'completed' && (
+                  }
+                  {withdrawal.status === 'completed' &&
                     <span className="status-badge completed">Completed</span>
-                  )}
-                  {(withdrawal.status === 'rejected' || withdrawal.status === 'failed' || withdrawal.status === 'timed_out') && (
+                  }
+                  {(withdrawal.status === 'rejected' || withdrawal.status === 'failed' || withdrawal.status === 'timed_out') &&
                     <span className="status-badge failed">Failed/Rejected</span>
-                  )}
+                  }
                 </td>
               </tr>
             ))}
