@@ -153,6 +153,7 @@ const AuthPage = ({ onLogin }) => {
                   placeholder="Referral Code (Optional)"
                   value={formData.referral_code}
                   onChange={(e) => setFormData({...formData, referral_code: e.target.value})}
+                  readOnly={!!formData.referral_code} {/* MODIFIED: Added readOnly attribute */}
                   className="form-input"
                 />
               </div>
@@ -268,7 +269,7 @@ const TaskCard = ({ task, onComplete, completed = false }) => {
       <h4 className="task-title">{task.title}</h4>
       <p className="task-description">{task.description}</p>
       
-      <div className="task-footer">
+  <div className="task-footer">
         <span className="task-type">{task.type.toUpperCase()}</span>
         {!completed && (
           <button className="btn-task" onClick={() => onComplete(task)}>
@@ -356,7 +357,6 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
           amount: parseFloat(amount),
@@ -423,7 +423,7 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
               type="tel"
               placeholder="254XXXXXXXXX"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)} /* FIX: Changed here */
+              onChange={(e) => setPhone(e.target.value)}
               required
               className="form-input"
             />
@@ -703,7 +703,8 @@ const Dashboard = ({ user, onLogout }) => {
   };
 
   const handleWithdraw = () => {
-    fetchDashboardModal(false);
+    fetchDashboardData();
+    setShowWithdrawModal(false);
   };
 
   if (loading) {
