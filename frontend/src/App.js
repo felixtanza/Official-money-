@@ -423,7 +423,7 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
               type="tel"
               placeholder="254XXXXXXXXX"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={(e) => setFormData({...formData, phone: e.target.value})}
               required
               className="form-input"
             />
@@ -1321,6 +1321,7 @@ const AdminWithdrawalsComponent = () => {
 
 // Admin Tasks Component
 const CreateTaskModal = ({ isOpen, onClose, onCreate }) => {
+  console.log("CreateTaskModal rendering. isOpen:", isOpen); // Debugging log
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -1373,7 +1374,11 @@ const CreateTaskModal = ({ isOpen, onClose, onCreate }) => {
     }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen) {
+    console.log("CreateTaskModal not open, returning null."); // Debugging log
+    return null;
+  }
+  console.log("CreateTaskModal is open, rendering content."); // Debugging log
 
   return (
     <div className="modal-overlay">
@@ -1382,6 +1387,11 @@ const CreateTaskModal = ({ isOpen, onClose, onCreate }) => {
           <h3>➕ Create New Task</h3>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
+        {/* TEST DIV: This should be visible if the modal is rendering */}
+        <div style={{ padding: '10px', backgroundColor: '#e0ffe0', border: '1px solid green', marginBottom: '10px' }}>
+          **TEST: MODAL CONTENT IS RENDERING HERE**
+        </div>
+        {/* End TEST DIV */}
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label>Title</label>
@@ -1408,7 +1418,7 @@ const CreateTaskModal = ({ isOpen, onClose, onCreate }) => {
           <div className="form-group">
             <label>Requirements (JSON)</label>
             <textarea name="requirements" value={formData.requirements} onChange={handleChange} className="form-input" placeholder='e.g., {"questions": 10, "time_limit": 300}'></textarea>
-            <small>{"Must be valid JSON string, e.g., {\"min_words\": 100}"}</small>
+            <small{"Must be valid JSON string, e.g., {\"min_words\": 100}"}small>
           </div>
           <div className="form-group checkbox-group">
             <input type="checkbox" name="is_active" checked={formData.is_active} onChange={handleChange} id="is_active_task" />
