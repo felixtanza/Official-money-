@@ -895,8 +895,8 @@ async def update_withdrawal_status(transaction_id: str, update_data: UpdateWithd
             "PartyA": MPESA_B2C_SHORTCODE,
             "PartyB": withdrawal['phone'],
             "Remarks": withdrawal['reason'] or "Withdrawal from EarnPlatform",
-            "QueueTimeOutURL": "YOUR_MPESA_B2C_TIMEOUT_URL_HERE", # IMPORTANT: Replace with your actual timeout URL
-            "ResultURL": "YOUR_MPESA_B2C_RESULT_URL_HERE", # IMPORTANT: Replace with your actual result URL
+            "QueueTimeOutURL": "https://official-money.onrender.com/api/payments/mpesa-b2c-timeout", # IMPORTANT: Replace with your actual timeout URL
+            "ResultURL": "https://official-money.onrender.com/api/payments/mpesa-b2c-result", # IMPORTANT: Replace with your actual result URL
             "Occasion": "User Withdrawal"
         }
 
