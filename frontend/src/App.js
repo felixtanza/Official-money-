@@ -423,7 +423,7 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
               type="tel"
               placeholder="254XXXXXXXXX"
               value={phone}
-              onChange={(e) => setFormData({...formData, phone: e.target.value})}
+              onChange={(e) => setPhone(e.target.value)} /* FIX: Changed here */
               required
               className="form-input"
             />
@@ -703,8 +703,7 @@ const Dashboard = ({ user, onLogout }) => {
   };
 
   const handleWithdraw = () => {
-    fetchDashboardData();
-    setShowWithdrawModal(false);
+    fetchDashboardModal(false);
   };
 
   if (loading) {
@@ -1418,7 +1417,7 @@ const CreateTaskModal = ({ isOpen, onClose, onCreate }) => {
           <div className="form-group">
             <label>Requirements (JSON)</label>
             <textarea name="requirements" value={formData.requirements} onChange={handleChange} className="form-input" placeholder='e.g., {"questions": 10, "time_limit": 300}'></textarea>
-            <small{"Must be valid JSON string, e.g., {\"min_words\": 100}"}small>
+            <small>{"Must be valid JSON string, e.g., {\"min_words\": 100}"}</small>
           </div>
           <div className="form-group checkbox-group">
             <input type="checkbox" name="is_active" checked={formData.is_active} onChange={handleChange} id="is_active_task" />
