@@ -360,32 +360,9 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
           message: data.message,
           type: 'success'
         });
-        
-        // Simulate successful payment after 3 seconds
-        setTimeout(async () => {
-          try {
-            const simulateResponse = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/payments/simulate-deposit-success?transaction_id=${data.transaction_id}`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-              },
-            });
-            
-            const simulateData = await simulateResponse.json();
-            if (simulateData.success) {
-              showNotification({
-                title: 'Payment Successful!',
-                message: simulateData.message,
-                type: 'success'
-              });
-              onDeposit();
-            }
-          } catch (error) {
-            console.error('Simulation error:', error);
-          }
-        }, 3000);
-        
-        onClose();
+        // No longer simulating success here. Backend callback will handle actual update.
+        onClose(); // Close modal immediately
+        onDeposit(); // Trigger dashboard refresh for potential immediate visual update (though actual balance update is async via callback)
       } else {
         showNotification({
           title: 'Error',
@@ -558,7 +535,7 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
   );
 };
 
-// Main Dashboard Component
+// Main Dashboard Component (for regular users)
 const Dashboard = ({ user, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [dashboardData, setDashboardData] = useState(null);
@@ -571,7 +548,7 @@ const Dashboard = ({ user, onLogout }) => {
   useEffect(() => {
     fetchDashboardData();
     fetchTasks();
-  }, []);
+  }, [user.is_activated]); // Re-fetch if activation status changes
 
   const fetchDashboardData = async () => {
     try {
@@ -585,9 +562,16 @@ const Dashboard = ({ user, onLogout }) => {
       const data = await response.json();
       if (data.success) {
         setDashboardData(data);
+        // Update user data in localStorage to reflect latest balance/activation status
+        localStorage.setItem('user', JSON.stringify(data.user));
       }
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
+      showNotification({
+        title: 'Error',
+        message: 'Failed to load dashboard data. Please refresh.',
+        type: 'error'
+      });
     } finally {
       setLoading(false);
     }
@@ -605,6 +589,11 @@ const Dashboard = ({ user, onLogout }) => {
       const data = await response.json();
       if (data.success) {
         setTasks(data.tasks);
+      } else {
+        // Handle cases where tasks might not be available due to non-activation
+        if (data.detail === "Account must be activated to access tasks") {
+          setTasks([]); // Clear tasks if not activated
+        }
       }
     } catch (error) {
       console.error('Error fetching tasks:', error);
@@ -838,6 +827,778 @@ const Dashboard = ({ user, onLogout }) => {
   );
 };
 
+// --- Admin Components ---
+
+// Admin Dashboard Main Component
+const AdminDashboard = ({ user, onLogout }) => {
+  const [currentPage, setCurrentPage] = useState('admin-stats');
+  const { theme, toggleTheme, showNotification } = useAppContext();
+
+  return (
+    <div className={`dashboard ${theme}`}>
+      <header className="dashboard-header">
+        <div className="header-content">
+          <h1>EarnPlatform Admin</h1>
+          <div className="header-actions">
+            <button className="theme-toggle" onClick={toggleTheme}>
+              {theme === 'light' ? '🌙' : '☀️'}
+            </button>
+            <button className="btn-logout" onClick={onLogout}>
+              Logout
+            </button>
+          </div>
+        </div>
+        
+        <nav className="dashboard-nav">
+          <button 
+            className={`nav-item ${currentPage === 'admin-stats' ? 'active' : ''}`}
+            onClick={() => setCurrentPage('admin-stats')}
+          >
+            📊 Overview
+          </button>
+          <button 
+            className={`nav-item ${currentPage === 'admin-users' ? 'active' : ''}`}
+            onClick={() => setCurrentPage('admin-users')}
+          >
+            👥 Users
+          </button>
+          <button 
+            className={`nav-item ${currentPage === 'admin-deposits' ? 'active' : ''}`}
+            onClick={() => setCurrentPage('admin-deposits')}
+          >
+            💳 Deposits
+          </button>
+          <button 
+            className={`nav-item ${currentPage === 'admin-withdrawals' ? 'active' : ''}`}
+            onClick={() => setCurrentPage('admin-withdrawals')}
+          >
+            💸 Withdrawals
+          </button>
+          <button 
+            className={`nav-item ${currentPage === 'admin-tasks' ? 'active' : ''}`}
+            onClick={() => setCurrentPage('admin-tasks')}
+          >
+            ⭐ Tasks
+          </button>
+          <button 
+            className={`nav-item ${currentPage === 'admin-notifications' ? 'active' : ''}`}
+            onClick={() => setCurrentPage('admin-notifications')}
+          >
+            🔔 Notifications
+          </button>
+        </nav>
+      </header>
+
+      <main className="dashboard-main">
+        {currentPage === 'admin-stats' && <AdminStatsComponent />}
+        {currentPage === 'admin-users' && <AdminUsersComponent />}
+        {currentPage === 'admin-deposits' && <AdminDepositsComponent />}
+        {currentPage === 'admin-withdrawals' && <AdminWithdrawalsComponent />}
+        {currentPage === 'admin-tasks' && <AdminTasksComponent />}
+        {currentPage === 'admin-notifications' && <AdminNotificationsComponent />}
+      </main>
+    </div>
+  );
+};
+
+// Admin Stats Component
+const AdminStatsComponent = () => {
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const { showNotification } = useAppContext();
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/dashboard/stats`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        const data = await response.json();
+        if (data.success) {
+          setStats(data.stats);
+        } else {
+          showNotification({ title: 'Error', message: data.detail || 'Failed to fetch admin stats', type: 'error' });
+        }
+      } catch (error) {
+        showNotification({ title: 'Error', message: 'Network error fetching admin stats.', type: 'error' });
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchStats();
+  }, []);
+
+  if (loading) return <div className="loading-container"><div className="loading-spinner"></div><p>Loading admin stats...</p></div>;
+  if (!stats) return <div className="error-message">Failed to load admin stats.</div>;
+
+  return (
+    <div className="admin-content">
+      <h2>Admin Overview</h2>
+      <div className="stats-grid">
+        <StatsCard title="Total Users" value={stats.total_users} icon="👥" color="blue" />
+        <StatsCard title="Activated Users" value={stats.activated_users} icon="✅" color="green" />
+        <StatsCard title="Total Deposits" value={`KSH ${stats.total_deposits.toFixed(2)}`} icon="💰" color="purple" />
+        <StatsCard title="Total Withdrawals" value={`KSH ${stats.total_withdrawals.toFixed(2)}`} icon="💸" color="orange" />
+        <StatsCard title="Pending Withdrawals" value={stats.pending_withdrawals} icon="⏳" color="red" />
+      </div>
+    </div>
+  );
+};
+
+// Admin Users Component
+const AdminUsersComponent = () => {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const { showNotification } = useAppContext();
+
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/users`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        const data = await response.json();
+        if (data.success) {
+          setUsers(data.users);
+        } else {
+          showNotification({ title: 'Error', message: data.detail || 'Failed to fetch users', type: 'error' });
+        }
+      } catch (error) {
+        showNotification({ title: 'Error', message: 'Network error fetching users.', type: 'error' });
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchUsers();
+  }, []);
+
+  if (loading) return <div className="loading-container"><div className="loading-spinner"></div><p>Loading users...</p></div>;
+
+  return (
+    <div className="admin-content">
+      <h2>All Users</h2>
+      <div className="table-container animated-card">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Phone</th>
+              <th>Balance</th>
+              <th>Activated</th>
+              <th>Role</th>
+              <th>Referrals</th>
+              <th>Joined At</th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map(user => (
+              <tr key={user.user_id}>
+                <td>{user.full_name}</td>
+                <td>{user.email}</td>
+                <td>{user.phone}</td>
+                <td>KSH {user.wallet_balance.toFixed(2)}</td>
+                <td>{user.is_activated ? 'Yes' : 'No'}</td>
+                <td>{user.role}</td>
+                <td>{user.referral_count}</td>
+                <td>{new Date(user.created_at).toLocaleDateString()}</td>
+              </tr>
+            ))}
+            {users.length === 0 && <tr><td colSpan="8">No users found.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// Admin Deposits Component
+const AdminDepositsComponent = () => {
+  const [deposits, setDeposits] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filterStatus, setFilterStatus] = useState('');
+  const { showNotification } = useAppContext();
+
+  const fetchDeposits = async (status = '') => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const url = status ? `${process.env.REACT_APP_BACKEND_URL}/api/admin/transactions/deposits?status=${status}` : `${process.env.REACT_APP_BACKEND_URL}/api/admin/transactions/deposits`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (data.success) {
+        setDeposits(data.deposits);
+      } else {
+        showNotification({ title: 'Error', message: data.detail || 'Failed to fetch deposits', type: 'error' });
+      }
+    } catch (error) {
+      showNotification({ title: 'Error', message: 'Network error fetching deposits.', type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDeposits(filterStatus);
+  }, [filterStatus]);
+
+  if (loading) return <div className="loading-container"><div className="loading-spinner"></div><p>Loading deposits...</p></div>;
+
+  return (
+    <div className="admin-content">
+      <h2>All Deposits</h2>
+      <div className="filter-controls">
+        <label>Filter by Status:</label>
+        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="form-select">
+          <option value="">All</option>
+          <option value="pending">Pending</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+        </select>
+      </div>
+      <div className="table-container animated-card">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>User Email</th>
+              <th>Amount</th>
+              <th>Phone</th>
+              <th>Status</th>
+              <th>Receipt</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            {deposits.map(deposit => (
+              <tr key={deposit.transaction_id}>
+                <td>{deposit.transaction_id.substring(0, 8)}...</td>
+                <td>{deposit.user_id.substring(0, 8)}...</td> {/* In a real app, fetch user email */}
+                <td>KSH {deposit.amount.toFixed(2)}</td>
+                <td>{deposit.phone}</td>
+                <td>{deposit.status}</td>
+                <td>{deposit.mpesa_receipt || 'N/A'}</td>
+                <td>{new Date(deposit.created_at).toLocaleString()}</td>
+              </tr>
+            ))}
+            {deposits.length === 0 && <tr><td colSpan="7">No deposits found.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// Admin Withdrawals Component
+const AdminWithdrawalsComponent = () => {
+  const [withdrawals, setWithdrawals] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filterStatus, setFilterStatus] = useState('');
+  const { showNotification } = useAppContext();
+
+  const fetchWithdrawals = async (status = '') => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const url = status ? `${process.env.REACT_APP_BACKEND_URL}/api/admin/transactions/withdrawals?status=${status}` : `${process.env.REACT_APP_BACKEND_URL}/api/admin/transactions/withdrawals`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (data.success) {
+        setWithdrawals(data.withdrawals);
+      } else {
+        showNotification({ title: 'Error', message: data.detail || 'Failed to fetch withdrawals', type: 'error' });
+      }
+    } catch (error) {
+      showNotification({ title: 'Error', message: 'Network error fetching withdrawals.', type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateWithdrawalStatus = async (transactionId, status, reason = null) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/transactions/withdrawals/${transactionId}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status, reason }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        showNotification({ title: 'Success', message: data.message, type: 'success' });
+        fetchWithdrawals(filterStatus); // Refresh list
+      } else {
+        showNotification({ title: 'Error', message: data.detail || 'Failed to update withdrawal status', type: 'error' });
+      }
+    } catch (error) {
+      showNotification({ title: 'Error', message: 'Network error updating withdrawal status.', type: 'error' });
+    }
+  };
+
+  useEffect(() => {
+    fetchWithdrawals(filterStatus);
+  }, [filterStatus]);
+
+  if (loading) return <div className="loading-container"><div className="loading-spinner"></div><p>Loading withdrawals...</p></div>;
+
+  return (
+    <div className="admin-content">
+      <h2>All Withdrawals</h2>
+      <div className="filter-controls">
+        <label>Filter by Status:</label>
+        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="form-select">
+          <option value="">All</option>
+          <option value="pending">Pending</option>
+          <option value="approved">Approved</option>
+          <option value="processing">Processing (M-Pesa B2C)</option>
+          <option value="completed">Completed</option>
+          <option value="rejected">Rejected</option>
+          <option value="failed">Failed</option>
+          <option value="timed_out">Timed Out</option>
+        </select>
+      </div>
+      <div className="table-container animated-card">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>User Email</th>
+              <th>Amount</th>
+              <th>Phone</th>
+              <th>Status</th>
+              <th>Requested At</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {withdrawals.map(withdrawal => (
+              <tr key={withdrawal.transaction_id}>
+                <td>{withdrawal.transaction_id.substring(0, 8)}...</td>
+                <td>{withdrawal.user_id.substring(0, 8)}...</td> {/* In a real app, fetch user email */}
+                <td>KSH {withdrawal.amount.toFixed(2)}</td>
+                <td>{withdrawal.phone}</td>
+                <td>{withdrawal.status}</td>
+                <td>{new Date(withdrawal.created_at).toLocaleString()}</td>
+                <td>
+                  {withdrawal.status === 'pending' && (
+                    <>
+                      <button 
+                        className="btn-action btn-approve" 
+                        onClick={() => updateWithdrawalStatus(withdrawal.transaction_id, 'approved')}
+                      >
+                        Approve
+                      </button>
+                      <button 
+                        className="btn-action btn-reject" 
+                        onClick={() => {
+                          const reason = prompt("Reason for rejection:");
+                          if (reason) updateWithdrawalStatus(withdrawal.transaction_id, 'rejected', reason);
+                        }}
+                      >
+                        Reject
+                      </button>
+                    </>
+                  )}
+                  {(withdrawal.status === 'approved' || withdrawal.status === 'processing') && (
+                     <span className="status-badge processing">Processing</span>
+                  )}
+                  {withdrawal.status === 'completed' && (
+                    <span className="status-badge completed">Completed</span>
+                  )}
+                  {(withdrawal.status === 'rejected' || withdrawal.status === 'failed' || withdrawal.status === 'timed_out') && (
+                    <span className="status-badge failed">Failed/Rejected</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {withdrawals.length === 0 && <tr><td colSpan="7">No withdrawals found.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// Admin Tasks Component
+const CreateTaskModal = ({ isOpen, onClose, onCreate }) => {
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    reward: '',
+    type: 'survey',
+    requirements: '{}', // JSON string
+    is_active: true
+  });
+  const [loading, setLoading] = useState(false);
+  const { showNotification } = useAppContext();
+
+  const handleChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value
+    }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const payload = {
+        ...formData,
+        reward: parseFloat(formData.reward),
+        requirements: JSON.parse(formData.requirements)
+      };
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/tasks`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (data.success) {
+        showNotification({ title: 'Success', message: data.message, type: 'success' });
+        onCreate();
+        onClose();
+      } else {
+        showNotification({ title: 'Error', message: data.detail || 'Failed to create task', type: 'error' });
+      }
+    } catch (error) {
+      showNotification({ title: 'Error', message: 'Network error creating task. Ensure requirements is valid JSON.', type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal animated-card">
+        <div className="modal-header">
+          <h3>➕ Create New Task</h3>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label>Title</label>
+            <input type="text" name="title" value={formData.title} onChange={handleChange} required className="form-input" />
+          </div>
+          <div className="form-group">
+            <label>Description</label>
+            <textarea name="description" value={formData.description} onChange={handleChange} required className="form-input"></textarea>
+          </div>
+          <div className="form-group">
+            <label>Reward (KSH)</label>
+            <input type="number" name="reward" value={formData.reward} onChange={handleChange} min="1" step="0.01" required className="form-input" />
+          </div>
+          <div className="form-group">
+            <label>Type</label>
+            <select name="type" value={formData.type} onChange={handleChange} className="form-select">
+              <option value="survey">Survey</option>
+              <option value="ad">Advertisement</option>
+              <option value="writing">Writing</option>
+              <option value="social">Social Media</option>
+              <option value="referral">Referral</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label>Requirements (JSON)</label>
+            <textarea name="requirements" value={formData.requirements} onChange={handleChange} className="form-input" placeholder='e.g., {"questions": 10, "time_limit": 300}'></textarea>
+            <small>Must be valid JSON string, e.g., `{"min_words": 100}`</small>
+          </div>
+          <div className="form-group checkbox-group">
+            <input type="checkbox" name="is_active" checked={formData.is_active} onChange={handleChange} id="is_active_task" />
+            <label htmlFor="is_active_task">Is Active</label>
+          </div>
+          <button type="submit" className="btn-primary" disabled={loading}>
+            {loading ? 'Creating...' : 'Create Task'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+const AdminTasksComponent = () => {
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreateTaskModal, setShowCreateTaskModal] = useState(false);
+  const { showNotification } = useAppContext();
+
+  const fetchTasks = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/tasks`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (data.success) {
+        setTasks(data.tasks);
+      } else {
+        showNotification({ title: 'Error', message: data.detail || 'Failed to fetch tasks', type: 'error' });
+      }
+    } catch (error) {
+      showNotification({ title: 'Error', message: 'Network error fetching tasks.', type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleTaskStatus = async (taskId, currentStatus) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/tasks/${taskId}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ is_active: !currentStatus }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        showNotification({ title: 'Success', message: data.message, type: 'success' });
+        fetchTasks(); // Refresh list
+      } else {
+        showNotification({ title: 'Error', message: data.detail || 'Failed to update task status', type: 'error' });
+      }
+    } catch (error) {
+      showNotification({ title: 'Error', message: 'Network error updating task status.', type: 'error' });
+    }
+  };
+
+  useEffect(() => {
+    fetchTasks();
+  }, []);
+
+  if (loading) return <div className="loading-container"><div className="loading-spinner"></div><p>Loading tasks...</p></div>;
+
+  return (
+    <div className="admin-content">
+      <h2>Manage Tasks</h2>
+      <button className="btn-primary" onClick={() => setShowCreateTaskModal(true)}>
+        ➕ Create New Task
+      </button>
+      <div className="table-container animated-card">
+        <table>
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Description</th>
+              <th>Reward</th>
+              <th>Type</th>
+              <th>Active</th>
+              <th>Created At</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.map(task => (
+              <tr key={task.task_id}>
+                <td>{task.title}</td>
+                <td>{task.description}</td>
+                <td>KSH {task.reward.toFixed(2)}</td>
+                <td>{task.type}</td>
+                <td>
+                  <input 
+                    type="checkbox" 
+                    checked={task.is_active} 
+                    onChange={() => toggleTaskStatus(task.task_id, task.is_active)} 
+                  />
+                </td>
+                <td>{new Date(task.created_at).toLocaleDateString()}</td>
+                <td>
+                  {/* Future: Edit Task button */}
+                </td>
+              </tr>
+            ))}
+            {tasks.length === 0 && <tr><td colSpan="7">No tasks found.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <CreateTaskModal 
+        isOpen={showCreateTaskModal}
+        onClose={() => setShowCreateTaskModal(false)}
+        onCreate={fetchTasks}
+      />
+    </div>
+  );
+};
+
+// Admin Notifications Component
+const BroadcastNotificationModal = ({ isOpen, onClose, onBroadcast }) => {
+  const [title, setTitle] = useState('');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+  const { showNotification } = useAppContext();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/notifications/create`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ title, message }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        showNotification({ title: 'Success', message: data.message, type: 'success' });
+        onBroadcast();
+        onClose();
+      } else {
+        showNotification({ title: 'Error', message: data.detail || 'Failed to broadcast notification', type: 'error' });
+      }
+    } catch (error) {
+      showNotification({ title: 'Error', message: 'Network error broadcasting notification.', type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal animated-card">
+        <div className="modal-header">
+          <h3>📢 Broadcast Notification</h3>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label>Title</label>
+            <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} required className="form-input" />
+          </div>
+          <div className="form-group">
+            <label>Message</label>
+            <textarea value={message} onChange={(e) => setMessage(e.target.value)} required className="form-input"></textarea>
+          </div>
+          <button type="submit" className="btn-primary" disabled={loading}>
+            {loading ? 'Sending...' : 'Send Broadcast'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+const AdminNotificationsComponent = () => {
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showBroadcastModal, setShowBroadcastModal] = useState(false);
+  const { showNotification } = useAppContext();
+
+  const fetchNotifications = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      // Admin can fetch all notifications (user_id: null for broadcast, or specific user_id)
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/notifications`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (data.success) {
+        setNotifications(data.notifications);
+      } else {
+        showNotification({ title: 'Error', message: data.detail || 'Failed to fetch notifications', type: 'error' });
+      }
+    } catch (error) {
+      showNotification({ title: 'Error', message: 'Network error fetching notifications.', type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const markNotificationAsRead = async (notificationId) => {
+    try {
+      const token = localStorage.getItem('token');
+      await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/notifications/${notificationId}/read`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      fetchNotifications(); // Refresh list
+    } catch (error) {
+      showNotification({ title: 'Error', message: 'Failed to mark notification as read.', type: 'error' });
+    }
+  };
+
+  useEffect(() => {
+    fetchNotifications();
+  }, []);
+
+  if (loading) return <div className="loading-container"><div className="loading-spinner"></div><p>Loading notifications...</p></div>;
+
+  return (
+    <div className="admin-content">
+      <h2>Manage Notifications</h2>
+      <button className="btn-primary" onClick={() => setShowBroadcastModal(true)}>
+        📢 Broadcast New Notification
+      </button>
+      <div className="table-container animated-card">
+        <table>
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Message</th>
+              <th>Target User ID</th>
+              <th>Read</th>
+              <th>Date</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {notifications.map(notification => (
+              <tr key={notification.notification_id}>
+                <td>{notification.title}</td>
+                <td>{notification.message}</td>
+                <td>{notification.user_id ? notification.user_id.substring(0, 8) + '...' : 'All Users'}</td>
+                <td>{notification.is_read ? 'Yes' : 'No'}</td>
+                <td>{new Date(notification.created_at).toLocaleString()}</td>
+                <td>
+                  {!notification.is_read && (
+                    <button 
+                      className="btn-action btn-mark-read" 
+                      onClick={() => markNotificationAsRead(notification.notification_id)}
+                    >
+                      Mark Read
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {notifications.length === 0 && <tr><td colSpan="6">No notifications found.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <BroadcastNotificationModal 
+        isOpen={showBroadcastModal}
+        onClose={() => setShowBroadcastModal(false)}
+        onBroadcast={fetchNotifications}
+      />
+    </div>
+  );
+};
+
+
 // Main App Component
 const App = () => {
   const [user, setUser] = useState(null);
@@ -851,7 +1612,9 @@ const App = () => {
     const savedUser = localStorage.getItem('user');
     
     if (token && savedUser) {
-      setUser(JSON.parse(savedUser));
+      const parsedUser = JSON.parse(savedUser);
+      setUser(parsedUser);
+      setTheme(parsedUser.theme || 'light');
     }
     
     // Check for referral code in URL
@@ -924,7 +1687,11 @@ const App = () => {
         {!user ? (
           <AuthPage onLogin={handleLogin} />
         ) : (
-          <Dashboard user={user} onLogout={handleLogout} />
+          user.role === 'admin' ? (
+            <AdminDashboard user={user} onLogout={handleLogout} />
+          ) : (
+            <Dashboard user={user} onLogout={handleLogout} />
+          )
         )}
 
         <div className="notification-container">
