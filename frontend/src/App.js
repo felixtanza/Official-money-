@@ -62,6 +62,9 @@ const AuthPage = ({ onLogin }) => {
 
     try {
       const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
+      console.log(`Attempting to ${isLogin ? 'login' : 'register'} with endpoint: ${process.env.REACT_APP_BACKEND_URL}${endpoint}`); // LOG
+      console.log('Sending formData:', formData); // LOG
+
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}${endpoint}`, {
         method: 'POST',
         headers: {
@@ -71,10 +74,12 @@ const AuthPage = ({ onLogin }) => {
       });
 
       const data = await response.json();
+      console.log('Auth response data:', data); // LOG
 
       if (data.success) {
         localStorage.setItem('token', data.token);
         localStorage.setItem('user', JSON.stringify(data.user));
+        console.log('Token saved to localStorage:', data.token); // LOG
         showNotification({
           title: 'Success!',
           message: data.message,
@@ -84,6 +89,7 @@ const AuthPage = ({ onLogin }) => {
         // Clear referral code from local storage after successful registration/login
         localStorage.removeItem('referral_code');
       } else {
+        console.error('Auth failed:', data.detail); // LOG
         showNotification({
           title: 'Error',
           message: data.detail || 'Authentication failed',
@@ -91,6 +97,7 @@ const AuthPage = ({ onLogin }) => {
         });
       }
     } catch (error) {
+      console.error('Network error during authentication:', error); // LOG
       showNotification({
         title: 'Error',
         message: 'Network error. Please try again.',
@@ -153,7 +160,7 @@ const AuthPage = ({ onLogin }) => {
                   placeholder="Referral Code (Optional)"
                   value={formData.referral_code}
                   onChange={(e) => setFormData({...formData, referral_code: e.target.value})}
-                  readOnly={!!formData.referral_code} /* MODIFIED: Added readOnly attribute */
+                  readOnly={!!formData.referral_code} 
                   className="form-input"
                 />
               </div>
@@ -353,10 +360,22 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
 
     try {
       const token = localStorage.getItem('token');
+      console.log('DepositModal - Token from localStorage:', token); // LOG
+      if (!token) {
+        showNotification({
+          title: 'Error',
+          message: 'Authentication token not found. Please log in again.',
+          type: 'error'
+        });
+        setLoading(false);
+        return; // Exit if no token
+      }
+
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/payments/deposit`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
           amount: parseFloat(amount),
@@ -365,6 +384,7 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
       });
 
       const data = await response.json();
+      console.log('Deposit response data:', data); // LOG
 
       if (data.success) {
         showNotification({
@@ -383,6 +403,7 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
         });
       }
     } catch (error) {
+      console.error('Network error during deposit:', error); // LOG
       showNotification({
         title: 'Error',
         message: 'Network error. Please try again.',
@@ -423,7 +444,7 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
               type="tel"
               placeholder="254XXXXXXXXX"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)} /* FIX: Changed here */
+              onChange={(e) => setPhone(e.target.value)}
               required
               className="form-input"
             />
@@ -455,6 +476,17 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
 
     try {
       const token = localStorage.getItem('token');
+      console.log('WithdrawModal - Token from localStorage:', token); // LOG
+      if (!token) {
+        showNotification({
+          title: 'Error',
+          message: 'Authentication token not found. Please log in again.',
+          type: 'error'
+        });
+        setLoading(false);
+        return; // Exit if no token
+      }
+
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/payments/withdraw`, {
         method: 'POST',
         headers: {
@@ -468,6 +500,7 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
       });
 
       const data = await response.json();
+      console.log('Withdraw response data:', data); // LOG
 
       if (data.success) {
         showNotification({
@@ -485,6 +518,7 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
         });
       }
     } catch (error) {
+      console.error('Network error during withdrawal:', error); // LOG
       showNotification({
         title: 'Error',
         message: 'Network error. Please try again.',
@@ -575,6 +609,12 @@ const Dashboard = ({ user, onLogout }) => {
   const fetchDashboardData = async () => {
     try {
       const token = localStorage.getItem('token');
+      console.log('fetchDashboardData - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Dashboard data fetch: No token found.');
+        setLoading(false);
+        return;
+      }
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/dashboard/stats`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -582,16 +622,24 @@ const Dashboard = ({ user, onLogout }) => {
       });
 
       const data = await response.json();
+      console.log('Dashboard data response:', data); // LOG
       if (data.success) {
         setDashboardData(data);
         // Update user data in localStorage to reflect latest balance/activation status
         localStorage.setItem('user', JSON.stringify(data.user));
+      } else {
+        console.error('Dashboard data fetch failed:', data.detail); // LOG
+        showNotification({
+          title: 'Error',
+          message: data.detail || 'Failed to load dashboard data. Please refresh.',
+          type: 'error'
+        });
       }
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
       showNotification({
         title: 'Error',
-        message: 'Failed to load dashboard data. Please refresh.',
+        message: 'Network error. Please try again.',
         type: 'error'
       });
     } finally {
@@ -602,6 +650,11 @@ const Dashboard = ({ user, onLogout }) => {
   const fetchTasks = async () => {
     try {
       const token = localStorage.getItem('token');
+      console.log('fetchTasks - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Tasks fetch: No token found.');
+        return;
+      }
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/tasks/available`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -609,9 +662,11 @@ const Dashboard = ({ user, onLogout }) => {
       });
 
       const data = await response.json();
+      console.log('Tasks response data:', data); // LOG
       if (data.success) {
         setTasks(data.tasks);
       } else {
+        console.error('Tasks fetch failed:', data.detail); // LOG
         // Handle cases where tasks might not be available due to non-activation
         if (data.detail === "Account must be activated to access tasks") {
           setTasks([]); // Clear tasks if not activated
@@ -625,6 +680,11 @@ const Dashboard = ({ user, onLogout }) => {
   const fetchUserNotifications = async () => {
     try {
       const token = localStorage.getItem('token');
+      console.log('fetchUserNotifications - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('User notifications fetch: No token found.');
+        return;
+      }
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/notifications`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -635,6 +695,7 @@ const Dashboard = ({ user, onLogout }) => {
       if (data.success) {
         setUserNotifications(data.notifications);
       } else {
+        console.error('User notifications fetch failed:', data.detail); // LOG
         showNotification({ title: 'Error', message: data.detail || 'Failed to fetch notifications', type: 'error' });
       }
     } catch (error) {
@@ -646,12 +707,19 @@ const Dashboard = ({ user, onLogout }) => {
   const markNotificationAsRead = async (notificationId) => {
     try {
       const token = localStorage.getItem('token');
+      console.log('markNotificationAsRead - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Mark notification read: No token found.');
+        showNotification({ title: 'Error', message: 'Authentication token not found. Please log in again.', type: 'error' });
+        return;
+      }
       await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/notifications/${notificationId}/read`, {
         method: 'PUT',
         headers: { 'Authorization': `Bearer ${token}` },
       });
       fetchUserNotifications(); // Refresh notifications after marking as read
     } catch (error) {
+      console.error('Error marking notification as read:', error); // LOG
       showNotification({ title: 'Error', message: 'Failed to mark notification as read.', type: 'error' });
     }
   };
@@ -660,6 +728,12 @@ const Dashboard = ({ user, onLogout }) => {
   const completeTask = async (task) => {
     try {
       const token = localStorage.getItem('token');
+      console.log('completeTask - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Complete task: No token found.');
+        showNotification({ title: 'Error', message: 'Authentication token not found. Please log in again.', type: 'error' });
+        return;
+      }
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/tasks/complete`, {
         method: 'POST',
         headers: {
@@ -673,6 +747,7 @@ const Dashboard = ({ user, onLogout }) => {
       });
 
       const data = await response.json();
+      console.log('Complete task response data:', data); // LOG
       if (data.success) {
         showNotification({
           title: 'Task Completed!',
@@ -682,6 +757,7 @@ const Dashboard = ({ user, onLogout }) => {
         fetchDashboardData();
         fetchTasks();
       } else {
+        console.error('Task completion failed:', data.detail); // LOG
         showNotification({
           title: 'Error',
           message: data.detail || 'Task completion failed',
@@ -689,6 +765,7 @@ const Dashboard = ({ user, onLogout }) => {
         });
       }
     } catch (error) {
+      console.error('Network error during task completion:', error); // LOG
       showNotification({
         title: 'Error',
         message: 'Network error. Please try again.',
@@ -1009,16 +1086,25 @@ const AdminStatsComponent = () => {
     const fetchStats = async () => {
       try {
         const token = localStorage.getItem('token');
+        console.log('AdminStatsComponent - Token from localStorage:', token); // LOG
+        if (!token) {
+          console.error('Admin stats fetch: No token found.');
+          setLoading(false);
+          return;
+        }
         const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/dashboard/stats`, {
           headers: { 'Authorization': `Bearer ${token}` },
         });
         const data = await response.json();
+        console.log('Admin stats response:', data); // LOG
         if (data.success) {
           setStats(data.stats);
         } else {
+          console.error('Admin stats fetch failed:', data.detail); // LOG
           showNotification({ title: 'Error', message: data.detail || 'Failed to fetch admin stats', type: 'error' });
         }
       } catch (error) {
+        console.error('Network error fetching admin stats:', error); // LOG
         showNotification({ title: 'Error', message: 'Network error fetching admin stats.', type: 'error' });
       } finally {
         setLoading(false);
@@ -1054,16 +1140,25 @@ const AdminUsersComponent = () => {
     const fetchUsers = async () => {
       try {
         const token = localStorage.getItem('token');
+        console.log('AdminUsersComponent - Token from localStorage:', token); // LOG
+        if (!token) {
+          console.error('Admin users fetch: No token found.');
+          setLoading(false);
+          return;
+        }
         const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/users`, {
           headers: { 'Authorization': `Bearer ${token}` },
         });
         const data = await response.json();
+        console.log('Admin users response:', data); // LOG
         if (data.success) {
           setUsers(data.users);
         } else {
+          console.error('Admin users fetch failed:', data.detail); // LOG
           showNotification({ title: 'Error', message: data.detail || 'Failed to fetch users', type: 'error' });
         }
       } catch (error) {
+        console.error('Network error fetching admin users:', error); // LOG
         showNotification({ title: 'Error', message: 'Network error fetching users.', type: 'error' });
       } finally {
         setLoading(false);
@@ -1123,17 +1218,26 @@ const AdminDepositsComponent = () => {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
+      console.log('AdminDepositsComponent - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Admin deposits fetch: No token found.');
+        setLoading(false);
+        return;
+      }
       const url = status ? `${process.env.REACT_APP_BACKEND_URL}/api/admin/transactions/deposits?status=${status}` : `${process.env.REACT_APP_BACKEND_URL}/api/admin/transactions/deposits`;
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       const data = await response.json();
+      console.log('Admin deposits response:', data); // LOG
       if (data.success) {
         setDeposits(data.deposits);
       } else {
+        console.error('Admin deposits fetch failed:', data.detail); // LOG
         showNotification({ title: 'Error', message: data.detail || 'Failed to fetch deposits', type: 'error' });
       }
     } catch (error) {
+      console.error('Network error fetching admin deposits:', error); // LOG
       showNotification({ title: 'Error', message: 'Network error fetching deposits.', type: 'error' });
     } finally {
       setLoading(false);
@@ -1202,17 +1306,26 @@ const AdminWithdrawalsComponent = () => {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
+      console.log('AdminWithdrawalsComponent - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Admin withdrawals fetch: No token found.');
+        setLoading(false);
+        return;
+      }
       const url = status ? `${process.env.REACT_APP_BACKEND_URL}/api/admin/transactions/withdrawals?status=${status}` : `${process.env.REACT_APP_BACKEND_URL}/api/admin/transactions/withdrawals`;
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       const data = await response.json();
+      console.log('Admin withdrawals response:', data); // LOG
       if (data.success) {
         setWithdrawals(data.withdrawals);
       } else {
+        console.error('Admin withdrawals fetch failed:', data.detail); // LOG
         showNotification({ title: 'Error', message: data.detail || 'Failed to fetch withdrawals', type: 'error' });
       }
     } catch (error) {
+      console.error('Network error fetching admin withdrawals:', error); // LOG
       showNotification({ title: 'Error', message: 'Network error fetching withdrawals.', type: 'error' });
     } finally {
       setLoading(false);
@@ -1222,6 +1335,12 @@ const AdminWithdrawalsComponent = () => {
   const updateWithdrawalStatus = async (transactionId, status, reason = null) => {
     try {
       const token = localStorage.getItem('token');
+      console.log('updateWithdrawalStatus - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Update withdrawal status: No token found.');
+        showNotification({ title: 'Error', message: 'Authentication token not found. Please log in again.', type: 'error' });
+        return;
+      }
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/transactions/withdrawals/${transactionId}/status`, {
         method: 'PUT',
         headers: {
@@ -1231,13 +1350,16 @@ const AdminWithdrawalsComponent = () => {
         body: JSON.stringify({ status, reason }),
       });
       const data = await response.json();
+      console.log('Update withdrawal status response:', data); // LOG
       if (data.success) {
         showNotification({ title: 'Success', message: data.message, type: 'success' });
         fetchWithdrawals(filterStatus); // Refresh list
       } else {
+        console.error('Update withdrawal status failed:', data.detail); // LOG
         showNotification({ title: 'Error', message: data.detail || 'Failed to update withdrawal status', type: 'error' });
       }
     } catch (error) {
+      console.error('Network error updating withdrawal status:', error); // LOG
       showNotification({ title: 'Error', message: 'Network error updating withdrawal status.', type: 'error' });
     }
   };
@@ -1346,6 +1468,13 @@ const CreateTaskModal = ({ isOpen, onClose, onCreate }) => {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
+      console.log('CreateTaskModal - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Create task: No token found.');
+        showNotification({ title: 'Error', message: 'Authentication token not found. Please log in again.', type: 'error' });
+        setLoading(false);
+        return;
+      }
       const payload = {
         ...formData,
         reward: parseFloat(formData.reward),
@@ -1360,14 +1489,17 @@ const CreateTaskModal = ({ isOpen, onClose, onCreate }) => {
         body: JSON.stringify(payload),
       });
       const data = await response.json();
+      console.log('Create task response:', data); // LOG
       if (data.success) {
         showNotification({ title: 'Success', message: data.message, type: 'success' });
         onCreate();
         onClose();
       } else {
+        console.error('Create task failed:', data.detail); // LOG
         showNotification({ title: 'Error', message: data.detail || 'Failed to create task', type: 'error' });
       }
     } catch (error) {
+      console.error('Network error creating task:', error); // LOG
       showNotification({ title: 'Error', message: 'Network error creating task. Ensure requirements is valid JSON.', type: 'error' });
     } finally {
       setLoading(false);
@@ -1443,16 +1575,25 @@ const AdminTasksComponent = () => {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
+      console.log('AdminTasksComponent - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Admin tasks fetch: No token found.');
+        setLoading(false);
+        return;
+      }
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/tasks`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       const data = await response.json();
+      console.log('Admin tasks response:', data); // LOG
       if (data.success) {
         setTasks(data.tasks);
       } else {
+        console.error('Admin tasks fetch failed:', data.detail); // LOG
         showNotification({ title: 'Error', message: data.detail || 'Failed to fetch tasks', type: 'error' });
       }
     } catch (error) {
+      console.error('Network error fetching admin tasks:', error); // LOG
       showNotification({ title: 'Error', message: 'Network error fetching tasks.', type: 'error' });
     } finally {
       setLoading(false);
@@ -1462,6 +1603,12 @@ const AdminTasksComponent = () => {
   const toggleTaskStatus = async (taskId, currentStatus) => {
     try {
       const token = localStorage.getItem('token');
+      console.log('toggleTaskStatus - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Toggle task status: No token found.');
+        showNotification({ title: 'Error', message: 'Authentication token not found. Please log in again.', type: 'error' });
+        return;
+      }
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/tasks/${taskId}/status`, {
         method: 'PUT',
         headers: {
@@ -1471,13 +1618,16 @@ const AdminTasksComponent = () => {
         body: JSON.stringify({ is_active: !currentStatus }),
       });
       const data = await response.json();
+      console.log('Toggle task status response:', data); // LOG
       if (data.success) {
         showNotification({ title: 'Success', message: data.message, type: 'success' });
         fetchTasks(); // Refresh list
       } else {
+        console.error('Toggle task status failed:', data.detail); // LOG
         showNotification({ title: 'Error', message: data.detail || 'Failed to update task status', type: 'error' });
       }
     } catch (error) {
+      console.error('Network error toggling task status:', error); // LOG
       showNotification({ title: 'Error', message: 'Network error updating task status.', type: 'error' });
     }
   };
@@ -1552,6 +1702,13 @@ const BroadcastNotificationModal = ({ isOpen, onClose, onBroadcast }) => {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
+      console.log('BroadcastNotificationModal - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Broadcast notification: No token found.');
+        showNotification({ title: 'Error', message: 'Authentication token not found. Please log in again.', type: 'error' });
+        setLoading(false);
+        return;
+      }
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/notifications/create`, {
         method: 'POST',
         headers: {
@@ -1561,14 +1718,17 @@ const BroadcastNotificationModal = ({ isOpen, onClose, onBroadcast }) => {
         body: JSON.stringify({ title, message }),
       });
       const data = await response.json();
+      console.log('Broadcast notification response:', data); // LOG
       if (data.success) {
         showNotification({ title: 'Success', message: data.message, type: 'success' });
         onBroadcast();
         onClose();
       } else {
+        console.error('Broadcast notification failed:', data.detail); // LOG
         showNotification({ title: 'Error', message: data.detail || 'Failed to broadcast notification', type: 'error' });
       }
     } catch (error) {
+      console.error('Network error broadcasting notification:', error); // LOG
       showNotification({ title: 'Error', message: 'Network error broadcasting notification.', type: 'error' });
     } finally {
       setLoading(false);
@@ -1612,17 +1772,26 @@ const AdminNotificationsComponent = () => {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
+      console.log('AdminNotificationsComponent - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Admin notifications fetch: No token found.');
+        setLoading(false);
+        return;
+      }
       // Admin can fetch all notifications (user_id: null for broadcast, or specific user_id)
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/notifications`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       const data = await response.json();
+      console.log("Fetched notifications:", data); // Log to see what's coming from backend
       if (data.success) {
         setNotifications(data.notifications);
       } else {
+        console.error('Admin notifications fetch failed:', data.detail); // LOG
         showNotification({ title: 'Error', message: data.detail || 'Failed to fetch notifications', type: 'error' });
       }
     } catch (error) {
+      console.error('Network error fetching admin notifications:', error); // LOG
       showNotification({ title: 'Error', message: 'Network error fetching notifications.', type: 'error' });
     } finally {
       setLoading(false);
@@ -1632,12 +1801,19 @@ const AdminNotificationsComponent = () => {
   const markNotificationAsRead = async (notificationId) => {
     try {
       const token = localStorage.getItem('token');
+      console.log('AdminNotificationsComponent mark as read - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Admin mark notification read: No token found.');
+        showNotification({ title: 'Error', message: 'Authentication token not found. Please log in again.', type: 'error' });
+        return;
+      }
       await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/notifications/${notificationId}/read`, {
         method: 'PUT',
         headers: { 'Authorization': `Bearer ${token}` },
       });
       fetchNotifications(); // Refresh list
     } catch (error) {
+      console.error('Error marking admin notification as read:', error); // LOG
       showNotification({ title: 'Error', message: 'Failed to mark notification as read.', type: 'error' });
     }
   };
@@ -1744,6 +1920,12 @@ const App = () => {
     // Save theme preference
     if (user) {
       const token = localStorage.getItem('token');
+      console.log('toggleTheme - Token from localStorage:', token); // LOG
+      if (!token) {
+        console.error('Toggle theme: No token found. Cannot save preference.');
+        showNotification({ title: 'Error', message: 'Authentication token not found. Theme preference not saved.', type: 'error' });
+        return;
+      }
       fetch(`${process.env.REACT_APP_BACKEND_URL}/api/settings/theme?theme=${newTheme}`, {
         method: 'PUT',
         headers: {
