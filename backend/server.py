@@ -393,7 +393,7 @@ async def initiate_deposit(deposit_data: DepositRequest, current_user: dict = De
         "PartyA": phone_number,
         "PartyB": MPESA_LIPA_NA_MPESA_SHORTCODE,
         "PhoneNumber": phone_number,
-        "CallBackURL": "YOUR_MPESA_CALLBACK_URL_HERE", # IMPORTANT: Replace with your actual callback URL
+        "CallBackURL": "https://official-money.onrender.com/api/payments/mpesa-callback", # IMPORTANT: Replace with your actual callback URL
         "AccountReference": f"EarnPlatform-{current_user['user_id']}",
         "TransactionDesc": f"Deposit for user {current_user['email']}"
     }
