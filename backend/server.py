@@ -15,6 +15,7 @@ import asyncio
 from urllib.parse import urlparse
 import json
 import httpx # Added for making HTTP requests to M-Pesa API
+from bson import ObjectId # Import ObjectId for handling MongoDB ObjectIds
 
 # Environment variables
 MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
@@ -41,7 +42,7 @@ app = FastAPI(title="EarnPlatform API", version="1.0.0")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://official-money-fromtend.onrender.com"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -124,6 +125,29 @@ def verify_jwt_token(token: str) -> dict:
 
 def generate_referral_code() -> str:
     return secrets.token_urlsafe(8).upper()
+
+def json_serializable_doc(doc):
+    """
+    Recursively converts MongoDB ObjectId and datetime objects within a document
+    or list of documents to strings for JSON serialization.
+    Also renames '_id' to 'id'.
+    """
+    if isinstance(doc, list):
+        return [json_serializable_doc(item) for item in doc]
+    if isinstance(doc, dict):
+        for key, value in doc.items():
+            if isinstance(value, ObjectId):
+                doc[key] = str(value)
+            elif isinstance(value, datetime):
+                doc[key] = value.isoformat()
+            elif isinstance(value, dict):
+                doc[key] = json_serializable_doc(value)
+            elif isinstance(value, list):
+                doc[key] = [json_serializable_doc(item) for item in value]
+        if '_id' in doc:
+            doc['id'] = str(doc.pop('_id')) # Rename _id to id and convert to string
+        return doc
+    return doc
 
 # M-Pesa Utility Functions
 async def get_mpesa_access_token():
@@ -237,11 +261,12 @@ async def register(user_data: UserRegister):
     
     token = create_jwt_token(user_id, user_data.email, user_data.role) # Pass role to token creation
     
+    # Return serializable user data
     return {
         "success": True,
         "message": "Registration successful! Please deposit KSH 500 to activate your account.",
         "token": token,
-        "user": {
+        "user": json_serializable_doc({
             "user_id": user_id,
             "email": user_data.email,
             "full_name": user_data.full_name,
@@ -249,7 +274,7 @@ async def register(user_data: UserRegister):
             "is_activated": False,
             "wallet_balance": 0.0,
             "role": user_data.role # Return role in user object
-        }
+        })
     }
 
 @app.post("/api/auth/login")
@@ -266,11 +291,12 @@ async def login(user_data: UserLogin):
     
     token = create_jwt_token(user['user_id'], user['email'], user.get('role', 'user')) # Pass role to token creation
     
+    # Return serializable user data
     return {
         "success": True,
         "message": "Login successful!",
         "token": token,
-        "user": {
+        "user": json_serializable_doc({
             "user_id": user['user_id'],
             "email": user['email'],
             "full_name": user['full_name'],
@@ -279,7 +305,7 @@ async def login(user_data: UserLogin):
             "wallet_balance": user['wallet_balance'],
             "theme": user.get('theme', 'light'),
             "role": user.get('role', 'user') # Return role in user object
-        }
+        })
     }
 
 # Dashboard routes
@@ -302,33 +328,38 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
         }}
     ]).to_list(10)
     
-    # Get task completion stats
-    task_completions = await db.task_completions.count_documents({"user_id": user_id})
-    
     # Get notifications
     notifications = await db.notifications.find(
         {"$or": [{"user_id": user_id}, {"user_id": None}]}
     ).sort("created_at", -1).limit(5).to_list(5)
     
+    # Apply serialization helper to all fetched data
+    serialized_transactions = json_serializable_doc(transactions)
+    serialized_referral_stats = json_serializable_doc(referral_stats)
+    serialized_notifications = json_serializable_doc(notifications)
+    
+    # The current_user object also needs to be serialized before returning
+    # Pass a copy to avoid modifying the original dictionary that might be used elsewhere
+    serialized_current_user = json_serializable_doc(current_user.copy()) 
+    
     return {
         "success": True,
         "user": {
-            "full_name": current_user['full_name'],
-            "wallet_balance": current_user['wallet_balance'],
-            "is_activated": current_user['is_activated'],
-            "activation_amount": current_user.get('activation_amount', 500.0),
-            "total_earned": current_user.get('total_earned', 0.0),
-            "total_withdrawn": current_user.get('total_withdrawn', 0.0),
-            "referral_earnings": current_user.get('referral_earnings', 0.0),
-            "task_earnings": current_user.get('task_earnings', 0.0),
-            "referral_count": current_user.get('referral_count', 0),
-            "referral_code": current_user['referral_code'],
-            "role": current_user.get('role', 'user') # Return role
+            "full_name": serialized_current_user['full_name'],
+            "wallet_balance": serialized_current_user['wallet_balance'],
+            "is_activated": serialized_current_user['is_activated'],
+            "activation_amount": serialized_current_user.get('activation_amount', 500.0),
+            "total_earned": serialized_current_user.get('total_earned', 0.0),
+            "total_withdrawn": serialized_current_user.get('total_withdrawn', 0.0),
+            "referral_earnings": serialized_current_user.get('referral_earnings', 0.0),
+            "task_earnings": serialized_current_user.get('task_earnings', 0.0),
+            "referral_count": serialized_current_user.get('referral_count', 0),
+            "referral_code": serialized_current_user['referral_code'],
+            "role": serialized_current_user.get('role', 'user')
         },
-        "recent_transactions": transactions,
-        "referral_stats": referral_stats,
-        "task_completions": task_completions,
-        "notifications": notifications
+        "recent_transactions": serialized_transactions,
+        "referral_stats": serialized_referral_stats,
+        "notifications": serialized_notifications
     }
 
 # Payment routes
@@ -588,7 +619,7 @@ async def get_available_tasks(current_user: dict = Depends(get_current_user)):
     
     return {
         "success": True,
-        "tasks": tasks
+        "tasks": json_serializable_doc(tasks) # Apply serialization
     }
 
 @app.post("/api/tasks/complete")
@@ -658,7 +689,7 @@ async def get_referral_stats(current_user: dict = Depends(get_current_user)):
         "activated_referrals": len([r for r in referrals if r['status'] in ['activated', 'rewarded']]),
         "total_earnings": sum(r.get('reward_amount', 0) for r in referrals if r['status'] == 'rewarded'),
         "referral_code": current_user['referral_code'],
-        "referrals": referrals
+        "referrals": json_serializable_doc(referrals) # Apply serialization
     }
     
     return {"success": True, "stats": stats}
@@ -731,12 +762,17 @@ async def get_notifications(current_user: dict = Depends(get_current_user)):
         {"$or": [{"user_id": current_user['user_id']}, {"user_id": None}]}
     ).sort("created_at", -1).limit(20).to_list(20)
     
-    return {"success": True, "notifications": notifications}
+    return {"success": True, "notifications": json_serializable_doc(notifications)} # Apply serialization
 
 @app.put("/api/notifications/{notification_id}/read")
 async def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
+    # Find the notification by its string ID, then update using its internal _id
+    notification = await db.notifications.find_one({"notification_id": notification_id})
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
     await db.notifications.update_one(
-        {"notification_id": notification_id},
+        {"_id": notification["_id"]}, # Use internal _id for update
         {"$set": {"is_read": True}}
     )
     return {"success": True, "message": "Notification marked as read"}
@@ -788,7 +824,7 @@ async def get_admin_dashboard_stats():
 @app.get("/api/admin/users", dependencies=[Depends(get_current_admin_user)])
 async def get_all_users():
     users = await db.users.find({}, {"password": 0}).to_list(1000) # Exclude password
-    return {"success": True, "users": users}
+    return {"success": True, "users": json_serializable_doc(users)} # Apply serialization
 
 @app.get("/api/admin/transactions/deposits", dependencies=[Depends(get_current_admin_user)])
 async def get_all_deposits(status: Optional[str] = None):
@@ -796,7 +832,7 @@ async def get_all_deposits(status: Optional[str] = None):
     if status:
         query["status"] = status
     deposits = await db.transactions.find(query).sort("created_at", -1).to_list(1000)
-    return {"success": True, "deposits": deposits}
+    return {"success": True, "deposits": json_serializable_doc(deposits)} # Apply serialization
 
 @app.get("/api/admin/transactions/withdrawals", dependencies=[Depends(get_current_admin_user)])
 async def get_all_withdrawals(status: Optional[str] = None):
@@ -804,7 +840,7 @@ async def get_all_withdrawals(status: Optional[str] = None):
     if status:
         query["status"] = status
     withdrawals = await db.transactions.find(query).sort("created_at", -1).to_list(1000)
-    return {"success": True, "withdrawals": withdrawals}
+    return {"success": True, "withdrawals": json_serializable_doc(withdrawals)} # Apply serialization
 
 @app.put("/api/admin/transactions/withdrawals/{transaction_id}/status", dependencies=[Depends(get_current_admin_user)])
 async def update_withdrawal_status(transaction_id: str, update_data: UpdateWithdrawalStatus):
@@ -825,7 +861,7 @@ async def update_withdrawal_status(transaction_id: str, update_data: UpdateWithd
         update_fields["admin_reason"] = update_data.reason
     
     await db.transactions.update_one(
-        {"transaction_id": transaction_id},
+        {"_id": withdrawal["_id"]}, # Use internal _id for update
         {"$set": update_fields}
     )
 
@@ -867,7 +903,7 @@ async def update_withdrawal_status(transaction_id: str, update_data: UpdateWithd
 
                 if b2c_data.get("ResponseCode") == "0":
                     await db.transactions.update_one(
-                        {"transaction_id": transaction_id},
+                        {"_id": withdrawal["_id"]}, # Use internal _id for update
                         {
                             "$set": {
                                 "mpesa_conversation_id": b2c_data.get("ConversationID"),
@@ -889,7 +925,7 @@ async def update_withdrawal_status(transaction_id: str, update_data: UpdateWithd
                         {"$inc": {"wallet_balance": withdrawal['amount']}} # Revert amount
                     )
                     await db.transactions.update_one(
-                        {"transaction_id": transaction_id},
+                        {"_id": withdrawal["_id"]}, # Use internal _id for update
                         {"$set": {"status": "failed", "admin_reason": f"M-Pesa B2C initiation failed: {b2c_data.get('errorMessage', 'Unknown M-Pesa error')}"}}
                     )
                     await create_notification({
@@ -905,7 +941,7 @@ async def update_withdrawal_status(transaction_id: str, update_data: UpdateWithd
                 {"$inc": {"wallet_balance": withdrawal['amount']}} # Revert amount
             )
             await db.transactions.update_one(
-                {"transaction_id": transaction_id},
+                {"_id": withdrawal["_id"]}, # Use internal _id for update
                 {"$set": {"status": "failed", "admin_reason": f"M-Pesa B2C HTTP error: {e.response.text}"}}
             )
             await create_notification({
@@ -921,7 +957,7 @@ async def update_withdrawal_status(transaction_id: str, update_data: UpdateWithd
                 {"$inc": {"wallet_balance": withdrawal['amount']}} # Revert amount
             )
             await db.transactions.update_one(
-                {"transaction_id": transaction_id},
+                {"_id": withdrawal["_id"]}, # Use internal _id for update
                 {"$set": {"status": "failed", "admin_reason": f"Internal error during B2C initiation: {e}"}}
             )
             await create_notification({
@@ -1091,7 +1127,7 @@ async def create_task(task_data: Task):
         "created_at": datetime.utcnow()
     }
     await db.tasks.insert_one(task_doc)
-    return {"success": True, "message": "Task created successfully", "task": task_doc}
+    return {"success": True, "message": "Task created successfully", "task": json_serializable_doc(task_doc)} # Apply serialization
 
 @app.get("/api/admin/tasks", dependencies=[Depends(get_current_admin_user)])
 async def get_all_tasks(status: Optional[bool] = None):
@@ -1099,7 +1135,7 @@ async def get_all_tasks(status: Optional[bool] = None):
     if status is not None:
         query["is_active"] = status
     tasks = await db.tasks.find(query).sort("created_at", -1).to_list(100)
-    return {"success": True, "tasks": tasks}
+    return {"success": True, "tasks": json_serializable_doc(tasks)} # Apply serialization
 
 @app.put("/api/admin/tasks/{task_id}/status", dependencies=[Depends(get_current_admin_user)])
 async def update_task_status(task_id: str, update_data: UpdateTaskStatus):
@@ -1108,7 +1144,7 @@ async def update_task_status(task_id: str, update_data: UpdateTaskStatus):
         raise HTTPException(status_code=404, detail="Task not found")
     
     await db.tasks.update_one(
-        {"task_id": task_id},
+        {"_id": task["_id"]}, # Use internal _id for update
         {"$set": {"is_active": update_data.is_active}}
     )
     return {"success": True, "message": f"Task status updated to active: {update_data.is_active}"}
