@@ -1331,7 +1331,6 @@ const CreateTaskModal = ({ isOpen, onClose, onCreate }) => {
     </div>
   );
 };
-export default AdminTasksComponent;
 
 const AdminTasksComponent = () => {
   const [tasks, setTasks] = useState([]);
