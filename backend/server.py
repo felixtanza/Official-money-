@@ -807,15 +807,17 @@ async def get_admin_dashboard_stats():
     total_users = await db.users.count_documents({})
     activated_users = await db.users.count_documents({"is_activated": True})
     
+    # Reverted to summing the amount for total deposits
     total_deposits_agg = await db.transactions.aggregate([
         {"$match": {"type": "deposit", "status": "completed"}},
-        {"$group": {"_id": None, "total_amount": {"$sum": 1}}} # Changed to sum count of documents
+        {"$group": {"_id": None, "total_amount": {"$sum": "$amount"}}} 
     ]).to_list(1)
     total_deposits = total_deposits_agg[0]['total_amount'] if total_deposits_agg else 0.0
 
+    # Reverted to summing the amount for total withdrawals
     total_withdrawals_agg = await db.transactions.aggregate([
         {"$match": {"type": "withdrawal", "status": "completed"}},
-        {"$group": {"_id": None, "total_amount": {"$sum": 1}}} # Changed to sum count of documents
+        {"$group": {"_id": None, "total_amount": {"$sum": "$amount"}}} 
     ]).to_list(1)
     total_withdrawals = total_withdrawals_agg[0]['total_amount'] if total_withdrawals_agg else 0.0
 
@@ -1128,7 +1130,6 @@ async def mpesa_b2c_timeout_callback(request: Request):
 async def create_task(task_data: Task):
     task_id = str(uuid.uuid4())
     task_doc = {
-        "task_id": task_id,
         "title": task_data.title,
         "description": task_data.description,
         "reward": task_data.reward,
