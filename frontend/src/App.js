@@ -13,7 +13,7 @@ const useAppContext = () => {
   return context;
 };
 
-// Notification Component
+// Notification Component (for ephemeral, client-side notifications)
 const Notification = ({ notification, onClose }) => {
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -46,6 +46,16 @@ const AuthPage = ({ onLogin }) => {
   const [loading, setLoading] = useState(false);
   const { showNotification } = useAppContext();
 
+  useEffect(() => {
+    // Auto-capture referral code from localStorage if present
+    const storedReferralCode = localStorage.getItem('referral_code');
+    if (storedReferralCode) {
+      setFormData(prev => ({ ...prev, referral_code: storedReferralCode }));
+      // Optionally clear it after setting to prevent it from sticking for future registrations
+      // localStorage.removeItem('referral_code'); 
+    }
+  }, []);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -71,6 +81,8 @@ const AuthPage = ({ onLogin }) => {
           type: 'success'
         });
         onLogin(data.user);
+        // Clear referral code from local storage after successful registration/login
+        localStorage.removeItem('referral_code');
       } else {
         showNotification({
           title: 'Error',
@@ -540,6 +552,7 @@ const Dashboard = ({ user, onLogout }) => {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [dashboardData, setDashboardData] = useState(null);
   const [tasks, setTasks] = useState([]);
+  const [userNotifications, setUserNotifications] = useState([]); // New state for user-specific notifications
   const [loading, setLoading] = useState(true);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
@@ -548,7 +561,8 @@ const Dashboard = ({ user, onLogout }) => {
   useEffect(() => {
     fetchDashboardData();
     fetchTasks();
-  }, [user.is_activated]); // Re-fetch if activation status changes
+    fetchUserNotifications(); // Fetch user notifications on component mount
+  }, [user.is_activated]); // Re-fetch if activation status changes or user data changes
 
   const fetchDashboardData = async () => {
     try {
@@ -599,6 +613,39 @@ const Dashboard = ({ user, onLogout }) => {
       console.error('Error fetching tasks:', error);
     }
   };
+
+  const fetchUserNotifications = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/notifications`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      const data = await response.json();
+      if (data.success) {
+        setUserNotifications(data.notifications);
+      } else {
+        showNotification({ title: 'Error', message: data.detail || 'Failed to fetch notifications', type: 'error' });
+      }
+    } catch (error) {
+      showNotification({ title: 'Error', message: 'Network error fetching notifications.', type: 'error' });
+    }
+  };
+
+  const markNotificationAsRead = async (notificationId) => {
+    try {
+      const token = localStorage.getItem('token');
+      await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/notifications/${notificationId}/read`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      fetchUserNotifications(); // Refresh notifications after marking as read
+    } catch (error) {
+      showNotification({ title: 'Error', message: 'Failed to mark notification as read.', type: 'error' });
+    }
+  };
+
 
   const completeTask = async (task) => {
     try {
@@ -692,6 +739,12 @@ const Dashboard = ({ user, onLogout }) => {
             onClick={() => setCurrentPage('referrals')}
           >
             👥 Referrals
+          </button>
+          <button 
+            className={`nav-item ${currentPage === 'notifications' ? 'active' : ''}`}
+            onClick={() => setCurrentPage('notifications')}
+          >
+            🔔 Notifications ({userNotifications.filter(n => !n.is_read).length})
           </button>
         </nav>
       </header>
@@ -806,6 +859,41 @@ const Dashboard = ({ user, onLogout }) => {
                 <li>Earn KSH 50 for each successful referral who activates their account</li>
                 <li>The more you refer, the more passive income you generate!</li>
               </ul>
+            </div>
+          </div>
+        )}
+
+        {currentPage === 'notifications' && (
+          <div className="notifications-content">
+            <div className="notifications-header">
+              <h2>Your Notifications</h2>
+              <p>Important updates and messages from EarnPlatform.</p>
+            </div>
+            <div className="notification-list">
+              {userNotifications.length > 0 ? (
+                userNotifications.map(notification => (
+                  <div key={notification.id} className={`user-notification-item animated-card ${notification.is_read ? 'read' : 'unread'}`}>
+                    <div className="notification-info">
+                      <h4>{notification.title}</h4>
+                      <p>{notification.message}</p>
+                      <small>{new Date(notification.created_at).toLocaleString()}</small>
+                    </div>
+                    {!notification.is_read && (
+                      <button 
+                        className="btn-mark-read" 
+                        onClick={() => markNotificationAsRead(notification.id)}
+                      >
+                        Mark as Read
+                      </button>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <div className="no-notifications animated-card">
+                  <h3>No New Notifications 🎉</h3>
+                  <p>You're all caught up! Check back later for updates.</p>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1185,7 +1273,6 @@ const AdminWithdrawalsComponent = () => {
                 <td>{withdrawal.transaction_id.substring(0, 8)}...</td>
                 <td>{withdrawal.user_id.substring(0, 8)}...</td> {/* In a real app, fetch user email */}
                 <td>KSH {withdrawal.amount.toFixed(2)}</td>
-                <td>{withdrawal.phone}</td>
                 <td>{withdrawal.status}</td>
                 <td>{new Date(withdrawal.created_at).toLocaleString()}</td>
                 <td>
@@ -1208,15 +1295,9 @@ const AdminWithdrawalsComponent = () => {
                       </button>
                     </>
                   )}
-                  {(withdrawal.status === 'approved' || withdrawal.status === 'processing') &&
-                     <span className="status-badge processing">Processing</span>
-                  }
-                  {withdrawal.status === 'completed' &&
-                    <span className="status-badge completed">Completed</span>
-                  }
-                  {(withdrawal.status === 'rejected' || withdrawal.status === 'failed' || withdrawal.status === 'timed_out') &&
-                    <span className="status-badge failed">Failed/Rejected</span>
-                  }
+                  {(withdrawal.status === 'approved' || withdrawal.status === 'processing') && (<span className="status-badge processing">Processing</span>)}
+                  {withdrawal.status === 'completed' && (<span className="status-badge completed">Completed</span>)}
+                  {(withdrawal.status === 'rejected' || withdrawal.status === 'failed' || withdrawal.status === 'timed_out') && (<span className="status-badge failed">Failed/Rejected</span>)}
                 </td>
               </tr>
             ))}
@@ -1567,7 +1648,7 @@ const AdminNotificationsComponent = () => {
           </thead>
           <tbody>
             {notifications.map(notification => (
-              <tr key={notification.notification_id}>
+              <tr key={notification.id}>
                 <td>{notification.title}</td>
                 <td>{notification.message}</td>
                 <td>{notification.user_id ? notification.user_id.substring(0, 8) + '...' : 'All Users'}</td>
@@ -1577,7 +1658,7 @@ const AdminNotificationsComponent = () => {
                   {!notification.is_read && (
                     <button 
                       className="btn-action btn-mark-read" 
-                      onClick={() => markNotificationAsRead(notification.notification_id)}
+                      onClick={() => markNotificationAsRead(notification.id)}
                     >
                       Mark Read
                     </button>
@@ -1603,7 +1684,7 @@ const AdminNotificationsComponent = () => {
 const App = () => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [notifications, setNotifications] = useState([]);
+  const [notifications, setNotifications] = useState([]); // For ephemeral notifications
   const [theme, setTheme] = useState('light');
 
   useEffect(() => {
@@ -1617,7 +1698,7 @@ const App = () => {
       setTheme(parsedUser.theme || 'light');
     }
     
-    // Check for referral code in URL
+    // Check for referral code in URL and store it temporarily
     const urlParams = new URLSearchParams(window.location.search);
     const refCode = urlParams.get('ref');
     if (refCode) {
