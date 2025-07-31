@@ -153,7 +153,7 @@ const AuthPage = ({ onLogin }) => {
                   placeholder="Referral Code (Optional)"
                   value={formData.referral_code}
                   onChange={(e) => setFormData({...formData, referral_code: e.target.value})}
-                  readOnly={!!formData.referral_code} {/* MODIFIED: Added readOnly attribute */}
+                  readOnly={!!formData.referral_code} /* MODIFIED: Added readOnly attribute */
                   className="form-input"
                 />
               </div>
@@ -423,7 +423,7 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
               type="tel"
               placeholder="254XXXXXXXXX"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={(e) => setPhone(e.target.value)} /* FIX: Changed here */
               required
               className="form-input"
             />
