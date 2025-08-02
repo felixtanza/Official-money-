@@ -734,7 +734,7 @@ const Dashboard = ({ user, onLogout }) => {
         showNotification({ title: 'Error', message: 'Authentication token not found. Please log in again.', type: 'error' });
         return;
       }
-      console.log("📦 Payload being sent:", payload);
+      
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/tasks/complete`, {
         method: 'POST',
         headers: {
@@ -742,7 +742,7 @@ const Dashboard = ({ user, onLogout }) => {
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          task_id: task.task_id || task._id,
+          task_id: task.task_id,
           completion_data: { completed_at: new Date().toISOString() }
         }),
         
