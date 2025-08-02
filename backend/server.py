@@ -1130,6 +1130,7 @@ async def mpesa_b2c_timeout_callback(request: Request):
 async def create_task(task_data: Task):
     task_id = str(uuid.uuid4())
     task_doc = {
+        "task_id": task_id,  # ✅ Include it in the task document
         "title": task_data.title,
         "description": task_data.description,
         "reward": task_data.reward,
