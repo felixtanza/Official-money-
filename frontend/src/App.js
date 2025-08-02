@@ -741,10 +741,10 @@ const Dashboard = ({ user, onLogout }) => {
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          task_id: task.task_id||task._id,
+          task_id: task.task_id || task._id,
           completion_data: { completed_at: new Date().toISOString() }
         }),
-        console.log("📦 Payload being sent:", payload);
+        console.log("📦 Payload being sent:", payload),
       });
 
       const data = await response.json();
