@@ -744,8 +744,9 @@ const Dashboard = ({ user, onLogout }) => {
           task_id: task.task_id || task._id,
           completion_data: { completed_at: new Date().toISOString() }
         }),
-        console.log("📦 Payload being sent:", payload),
+        
       });
+      console.log("📦 Payload being sent:", payload);
 
       const data = await response.json();
       console.log('Complete task response data:', data); // LOG
