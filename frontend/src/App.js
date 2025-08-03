@@ -1448,7 +1448,7 @@ const AdminWithdrawalsComponent = () => {
 const CreateTaskModal = ({ isOpen, onClose, onCreate }) => {
   console.log("CreateTaskModal rendering. isOpen:", isOpen); // Debugging log
   const [formData, setFormData] = useState({
-    task_id: uuidv4(), // Generate a unique ID for each new task
+    
     title: '',
     description: '',
     reward: '',
