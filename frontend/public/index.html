@@ -105,11 +105,10 @@
   justify-content: center;
   align-items: center;
   z-index: 1000;
-  animation: rotateRing 4s linear infinite;
-  box-shadow: 0 0 15px #25D366;
+  box-shadow: 0 0 10px #25D366;
+  animation: pulse 2s ease-in-out infinite;
 }
 
-/* Ring glow overlay using pseudo-element */
 .neon-ring::before {
   content: "";
   position: absolute;
@@ -127,18 +126,18 @@
     #ff00ff,
     #ff0000
   );
-  animation: spin 3s linear infinite;
   z-index: -1;
-  filter: blur(6px);
+  filter: blur(8px);
+  animation: spin 3s linear infinite;
 }
 
-/* WhatsApp icon inside */
+/* WhatsApp Icon */
 .neon-ring img {
   width: 30px;
   height: 30px;
 }
 
-/* Animation for spinning ring */
+/* Ring Spin */
 @keyframes spin {
   0% {
     transform: rotate(0deg);
@@ -148,11 +147,17 @@
   }
 }
 
-/* Optional: hover scale effect */
-.neon-ring:hover {
-  transform: scale(1.1);
-  transition: transform 0.3s ease-in-out;
-            }
+/* Pulsing effect */
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 10px #25D366, 0 0 20px #25D366;
+  }
+  50% {
+    transform: scale(1.1);
+    box-shadow: 0 0 20px #25D366, 0 0 40px #25D366;
+  }
+      }
         </style>
     </body>
 </html>
