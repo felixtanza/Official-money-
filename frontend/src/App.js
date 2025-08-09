@@ -6,9 +6,12 @@ const AppContext = createContext();
 
 // Format numbers with commas globally
 const formatNumber = (num) => {
-  if (!num && num !== 0) return '';
-  return num.toLocaleString();
+  if (num === null || num === undefined || num === '') return '';
+  const numberValue = Number(num);
+  if (isNaN(numberValue)) return num; // Return original if not a valid number
+  return numberValue.toLocaleString();
 };
+
 
 // Hook to use the app context
 const useAppContext = () => {
