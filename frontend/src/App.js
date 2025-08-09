@@ -4,6 +4,12 @@ import './App.css';
 // Context for global state management
 const AppContext = createContext();
 
+// Format numbers with commas globally
+const formatNumber = (num) => {
+  if (!num && num !== 0) return '';
+  return num.toLocaleString();
+};
+
 // Hook to use the app context
 const useAppContext = () => {
   const context = useContext(AppContext);
