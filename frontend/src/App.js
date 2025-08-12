@@ -362,8 +362,66 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
   const [amount, setAmount] = useState('500');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState('mpesa'); // 'mpesa' or 'paypal'
+  const [paymentMethod, setPaymentMethod] = useState('mpesa');
   const { showNotification } = useAppContext();
+  const [paypalOrderId, setPaypalOrderId] = useState(null);
+
+  // Handle PayPal return from redirect
+  useEffect(() => {
+    if (paymentMethod === 'paypal' && isOpen) {
+      const queryParams = new URLSearchParams(window.location.search);
+      const token = queryParams.get('token');
+      const payerId = queryParams.get('PayerID');
+
+      if (token && payerId) {
+        handlePaypalReturn(token, payerId);
+        // Clean the URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+  }, [isOpen, paymentMethod]);
+
+  const handlePaypalReturn = async (orderId, payerId) => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/payments/paypal/capture-order`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ order_id: orderId }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        showNotification({
+          title: 'Payment Successful!',
+          message: `Deposit of KSH ${amount} completed via PayPal`,
+          type: 'success'
+        });
+        onClose();
+        onDeposit();
+      } else {
+        showNotification({
+          title: 'Payment Failed',
+          message: data.detail || 'Could not complete PayPal payment',
+          type: 'error'
+        });
+      }
+    } catch (error) {
+      console.error('PayPal capture error:', error);
+      showNotification({
+        title: 'Error',
+        message: 'Failed to verify PayPal payment',
+        type: 'error'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleDeposit = async (e) => {
     e.preventDefault();
@@ -409,11 +467,13 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
 
       if (data.success) {
         if (paymentMethod === 'paypal' && data.approval_url) {
+          // Store order ID for verification later
+          setPaypalOrderId(data.order_id);
           // Redirect to PayPal for payment
           window.location.href = data.approval_url;
         } else {
           showNotification({
-            title: paymentMethod === 'mpesa' ? 'Deposit Initiated!' : 'PayPal Redirect',
+            title: 'Deposit Initiated!',
             message: data.message,
             type: 'success'
           });
@@ -476,6 +536,11 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
               required
               className="form-input"
             />
+            {paymentMethod === 'paypal' && (
+              <small className="exchange-note">
+                ≈ ${(parseFloat(amount) * 0.007).toFixed(2)} (Exchange rate: 1 KES ≈ $0.007)
+              </small>
+            )}
           </div>
           
           {paymentMethod === 'mpesa' && (
@@ -488,6 +553,8 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
                 onChange={(e) => setPhone(e.target.value)}
                 required
                 className="form-input"
+                pattern="254\d{9}"
+                title="Format: 254 followed by 9 digits (e.g., 254712345678)"
               />
             </div>
           )}
@@ -497,27 +564,44 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
               <>
                 <p>📱 You will receive an M-Pesa prompt on your phone</p>
                 <p>⏱️ Complete the payment within 5 minutes</p>
+                <p>💵 Minimum deposit: KSH 10</p>
               </>
             ) : (
               <>
                 <p>🔒 Secure PayPal payment</p>
                 <p>🌍 Accepts international cards</p>
+                <p>💵 Minimum deposit: $1 (≈ KSH 150)</p>
+                <p>↔️ Conversion to KSH will be automatic</p>
               </>
             )}
           </div>
 
-          <button type="submit" className="btn-primary" disabled={loading}>
+          <button 
+            type="submit" 
+            className="btn-primary" 
+            disabled={loading || (paymentMethod === 'paypal' && parseFloat(amount) < 150)}
+          >
             {loading 
-              ? 'Processing...' 
+              ? (paymentMethod === 'paypal' ? 'Redirecting to PayPal...' : 'Processing...')
               : paymentMethod === 'mpesa' 
                 ? 'Initiate Deposit' 
                 : 'Pay with PayPal'}
           </button>
+
+          {paymentMethod === 'paypal' && (
+            <div className="paypal-disclaimer">
+              <small>
+                By clicking "Pay with PayPal", you will be redirected to PayPal's secure checkout.
+              </small>
+            </div>
+          )}
         </form>
       </div>
     </div>
   );
 };
+      
+                
 
 
 const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
