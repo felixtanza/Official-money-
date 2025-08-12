@@ -4,6 +4,10 @@ from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List, Dict, Any
+# Add these imports at the top with your other imports
+import paypalrestsdk  # For PayPal SDK configuration
+from email_validator import validate_email, EmailNotValidError  # For email validation in PayPal withdrawals
+from decimal import Decimal  # For precise monetary calculations
 import os
 import uuid
 import bcrypt
@@ -1246,6 +1250,500 @@ async def startup_event():
             "role": "admin"
         })
         print(f"Default admin user created: {admin_email}/{admin_password}")
+
+
+# Add these environment variables for PayPal
+PAYPAL_CLIENT_ID = os.environ.get('PAYPAL_CLIENT_ID', '')
+PAYPAL_CLIENT_SECRET = os.environ.get('PAYPAL_CLIENT_SECRET', '')
+PAYPAL_MODE = os.environ.get('PAYPAL_MODE', 'sandbox')  # or 'live'
+PAYPAL_CURRENCY = os.environ.get('PAYPAL_CURRENCY', 'USD')
+PAYPAL_RETURN_URL = os.environ.get('PAYPAL_RETURN_URL', 'https://yourdomain.com/payment/success')
+PAYPAL_CANCEL_URL = os.environ.get('PAYPAL_CANCEL_URL', 'https://yourdomain.com/payment/cancel')
+
+# Configure PayPal SDK
+paypalrestsdk.configure({
+    "mode": PAYPAL_MODE,
+    "client_id": PAYPAL_CLIENT_ID,
+    "client_secret": PAYPAL_CLIENT_SECRET
+})
+
+# PayPal Utility Functions
+async def get_paypal_access_token():
+    """Get PayPal OAuth2 access token"""
+    auth = f"{PAYPAL_CLIENT_ID}:{PAYPAL_CLIENT_SECRET}"
+    encoded_auth = base64.b64encode(auth.encode('utf-8')).decode('utf-8')
+    
+    headers = {
+        "Authorization": f"Basic {encoded_auth}",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    data = "grant_type=client_credentials"
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            url = "https://api-m.sandbox.paypal.com/v1/oauth2/token" if PAYPAL_MODE == "sandbox" else "https://api-m.paypal.com/v1/oauth2/token"
+            response = await client.post(url, headers=headers, data=data)
+            response.raise_for_status()
+            return response.json()["access_token"]
+    except Exception as e:
+        print(f"PayPal auth error: {e}")
+        raise HTTPException(status_code=500, detail="Could not get PayPal access token")
+
+async def create_paypal_order(amount: float, currency: str, user_id: str, description: str):
+    """Create a PayPal order for payment"""
+    access_token = await get_paypal_access_token()
+    
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+    
+    payload = {
+        "intent": "CAPTURE",
+        "purchase_units": [{
+            "reference_id": user_id,
+            "description": description,
+            "amount": {
+                "currency_code": currency,
+                "value": f"{amount:.2f}"
+            }
+        }],
+        "application_context": {
+            "return_url": PAYPAL_RETURN_URL,
+            "cancel_url": PAYPAL_CANCEL_URL,
+            "brand_name": "EarnPlatform",
+            "user_action": "PAY_NOW",
+            "shipping_preference": "NO_SHIPPING"
+        }
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            url = "https://api-m.sandbox.paypal.com/v2/checkout/orders" if PAYPAL_MODE == "sandbox" else "https://api-m.paypal.com/v2/checkout/orders"
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        print(f"PayPal order creation error: {e}")
+        raise HTTPException(status_code=500, detail="Could not create PayPal order")
+
+async def capture_paypal_order(order_id: str):
+    """Capture a PayPal payment"""
+    access_token = await get_paypal_access_token()
+    
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            url = f"https://api-m.sandbox.paypal.com/v2/checkout/orders/{order_id}/capture" if PAYPAL_MODE == "sandbox" else f"https://api-m.paypal.com/v2/checkout/orders/{order_id}/capture"
+            response = await client.post(url, headers=headers)
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        print(f"PayPal capture error: {e}")
+        raise HTTPException(status_code=500, detail="Could not capture PayPal payment")
+
+async def get_paypal_payout_status(payout_id: str):
+    """Get status of a PayPal payout"""
+    access_token = await get_paypal_access_token()
+    
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            url = f"https://api-m.sandbox.paypal.com/v1/payments/payouts/{payout_id}" if PAYPAL_MODE == "sandbox" else f"https://api-m.paypal.com/v1/payments/payouts/{payout_id}"
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        print(f"PayPal payout status error: {e}")
+        raise HTTPException(status_code=500, detail="Could not get PayPal payout status")
+
+# PayPal Routes
+@app.post("/api/payments/paypal/create-order")
+async def create_paypal_order_endpoint(
+    amount: float,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create a PayPal order for deposit"""
+    try:
+        # Convert KES to USD (you'll need a real exchange rate API for production)
+        # This is a simplified example - use a real exchange rate service
+        exchange_rate = 0.007  # Example: 1 KES = 0.007 USD
+        usd_amount = amount * exchange_rate
+        
+        # Create PayPal order
+        order = await create_paypal_order(
+            amount=usd_amount,
+            currency=PAYPAL_CURRENCY,
+            user_id=current_user['user_id'],
+            description=f"Deposit of {amount} KES to EarnPlatform"
+        )
+        
+        # Create transaction record
+        transaction_id = str(uuid.uuid4())
+        transaction_doc = {
+            "transaction_id": transaction_id,
+            "user_id": current_user['user_id'],
+            "type": "deposit",
+            "amount": amount,
+            "currency": "KES",
+            "converted_amount": usd_amount,
+            "converted_currency": PAYPAL_CURRENCY,
+            "status": "pending",
+            "method": "paypal",
+            "paypal_order_id": order['id'],
+            "created_at": datetime.utcnow(),
+            "completed_at": None
+        }
+        await db.transactions.insert_one(transaction_doc)
+        
+        # Find the approval link
+        approval_link = next(
+            (link['href'] for link in order['links'] if link['rel'] == 'approve'),
+            None
+        )
+        
+        if not approval_link:
+            raise HTTPException(status_code=500, detail="No approval link found in PayPal response")
+        
+        return {
+            "success": True,
+            "message": "PayPal order created",
+            "order_id": order['id'],
+            "approval_url": approval_link,
+            "transaction_id": transaction_id
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/payments/paypal/capture-order")
+async def capture_paypal_order_endpoint(
+    order_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Capture a PayPal payment after user approval"""
+    try:
+        # Capture the payment
+        capture_result = await capture_paypal_order(order_id)
+        
+        # Find the transaction
+        transaction = await db.transactions.find_one({
+            "paypal_order_id": order_id,
+            "user_id": current_user['user_id']
+        })
+        
+        if not transaction:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        
+        # Update transaction status
+        if capture_result['status'] == 'COMPLETED':
+            # Find the purchase unit to get the amount
+            purchase_unit = capture_result['purchase_units'][0]
+            payment = purchase_unit['payments']['captures'][0]
+            
+            # Update user balance
+            amount = transaction['amount']  # Original KES amount
+            
+            await db.users.update_one(
+                {"user_id": current_user['user_id']},
+                {
+                    "$inc": {"wallet_balance": amount},
+                    "$inc": {"total_earned": amount}
+                }
+            )
+            
+            # Update transaction
+            await db.transactions.update_one(
+                {"transaction_id": transaction['transaction_id']},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "completed_at": datetime.utcnow(),
+                        "paypal_capture_id": payment['id'],
+                        "details": capture_result
+                    }
+                }
+            )
+            
+            # Check if this is an activation deposit
+            user = await db.users.find_one({"user_id": current_user['user_id']})
+            if not user['is_activated'] and user['wallet_balance'] >= user['activation_amount']:
+                await db.users.update_one(
+                    {"user_id": current_user['user_id']},
+                    {"$set": {"is_activated": True}}
+                )
+                
+                # Check for referral activation
+                referral = await db.referrals.find_one({
+                    "referred_id": current_user['user_id'],
+                    "status": "pending"
+                })
+                
+                if referral:
+                    # Update referral status and reward referrer
+                    await db.referrals.update_one(
+                        {"referral_id": referral['referral_id']},
+                        {
+                            "$set": {
+                                "status": "activated",
+                                "activation_date": datetime.utcnow()
+                            }
+                        }
+                    )
+                    
+                    reward_amount = referral['reward_amount']
+                    await db.users.update_one(
+                        {"user_id": referral['referrer_id']},
+                        {
+                            "$inc": {
+                                "wallet_balance": reward_amount,
+                                "referral_earnings": reward_amount,
+                                "total_earned": reward_amount,
+                                "referral_count": 1
+                            }
+                        }
+                    )
+                    
+                    # Create transaction for referrer
+                    referral_transaction_id = str(uuid.uuid4())
+                    await db.transactions.insert_one({
+                        "transaction_id": referral_transaction_id,
+                        "user_id": referral['referrer_id'],
+                        "type": "referral",
+                        "amount": reward_amount,
+                        "status": "completed",
+                        "method": "system",
+                        "created_at": datetime.utcnow(),
+                        "completed_at": datetime.utcnow(),
+                        "reference": f"Referral bonus for {current_user['email']}"
+                    })
+            
+            return {
+                "success": True,
+                "message": "Payment captured successfully",
+                "amount": amount,
+                "wallet_balance": user['wallet_balance'] + amount,
+                "is_activated": user['wallet_balance'] + amount >= user['activation_amount']
+            }
+        else:
+            raise HTTPException(status_code=400, detail="Payment not completed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/payments/paypal/withdraw")
+async def withdraw_to_paypal(
+    withdrawal_data: PayPalWithdrawalRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Withdraw funds to PayPal"""
+    try:
+        user_id = current_user['user_id']
+        
+        # Validate user has sufficient balance
+        if current_user['wallet_balance'] < withdrawal_data.amount:
+            raise HTTPException(status_code=400, detail="Insufficient balance")
+        
+        # Convert KES to USD (use real exchange rate in production)
+        exchange_rate = 0.007  # Example rate
+        usd_amount = withdrawal_data.amount * exchange_rate
+        
+        # Create payout
+        payout_id = str(uuid.uuid4())
+        access_token = await get_paypal_access_token()
+        
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "sender_batch_header": {
+                "sender_batch_id": payout_id,
+                "email_subject": "You have a payment from EarnPlatform",
+                "email_message": f"You have received a payment of {usd_amount:.2f} USD from EarnPlatform."
+            },
+            "items": [{
+                "recipient_type": "EMAIL",
+                "amount": {
+                    "value": f"{usd_amount:.2f}",
+                    "currency": PAYPAL_CURRENCY
+                },
+                "note": "Withdrawal from EarnPlatform",
+                "sender_item_id": user_id,
+                "receiver": withdrawal_data.email,
+                "notification_language": "en-US"
+            }]
+        }
+        
+        # First create transaction record
+        transaction_id = str(uuid.uuid4())
+        transaction_doc = {
+            "transaction_id": transaction_id,
+            "user_id": user_id,
+            "type": "withdrawal",
+            "amount": withdrawal_data.amount,
+            "original_kes": withdrawal_data.original_kes,
+            "converted_amount": usd_amount,
+            "converted_currency": PAYPAL_CURRENCY,
+            "status": "processing",
+            "method": "paypal",
+            "paypal_payout_id": payout_id,
+            "recipient_email": withdrawal_data.email,
+            "created_at": datetime.utcnow(),
+            "completed_at": None
+        }
+        await db.transactions.insert_one(transaction_doc)
+        
+        # Deduct from user balance immediately
+        await db.users.update_one(
+            {"user_id": user_id},
+            {
+                "$inc": {
+                    "wallet_balance": -withdrawal_data.amount,
+                    "total_withdrawn": withdrawal_data.amount
+                }
+            }
+        )
+        
+        # Make the payout request
+        try:
+            async with httpx.AsyncClient() as client:
+                url = "https://api-m.sandbox.paypal.com/v1/payments/payouts" if PAYPAL_MODE == "sandbox" else "https://api-m.paypal.com/v1/payments/payouts"
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                payout_response = response.json()
+                
+                # Update transaction with PayPal response
+                await db.transactions.update_one(
+                    {"transaction_id": transaction_id},
+                    {
+                        "$set": {
+                            "paypal_batch_id": payout_response['batch_header']['payout_batch_id'],
+                            "details": payout_response
+                        }
+                    }
+                )
+                
+                return {
+                    "success": True,
+                    "message": "Withdrawal processing",
+                    "transaction_id": transaction_id,
+                    "payout_batch_id": payout_response['batch_header']['payout_batch_id'],
+                    "new_balance": current_user['wallet_balance'] - withdrawal_data.amount
+                }
+        except httpx.HTTPStatusError as e:
+            # If payout fails, refund the user
+            await db.users.update_one(
+                {"user_id": user_id},
+                {
+                    "$inc": {
+                        "wallet_balance": withdrawal_data.amount,
+                        "total_withdrawn": -withdrawal_data.amount
+                    }
+                }
+            )
+            
+            await db.transactions.update_one(
+                {"transaction_id": transaction_id},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "completed_at": datetime.utcnow(),
+                        "error": e.response.text
+                    }
+                }
+            )
+            
+            raise HTTPException(status_code=400, detail=f"PayPal payout failed: {e.response.text}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/payments/paypal/webhook")
+async def paypal_webhook(request: Request):
+    """Handle PayPal webhook events"""
+    try:
+        data = await request.json()
+        event_type = data['event_type']
+        
+        # Verify webhook signature (important for production)
+        # You should implement proper signature verification here
+        
+        # Handle different event types
+        if event_type == "PAYMENT.CAPTURE.COMPLETED":
+            # Handle completed payment
+            resource = data['resource']
+            order_id = resource['supplementary_data']['related_ids']['order_id']
+            
+            # Update transaction status
+            await db.transactions.update_one(
+                {"paypal_capture_id": resource['id']},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "completed_at": datetime.utcnow(),
+                        "details": resource
+                    }
+                }
+            )
+            
+        elif event_type == "PAYMENT.PAYOUTS-ITEM.SUCCEEDED":
+            # Handle successful payout
+            resource = data['resource']
+            payout_item_id = resource['payout_item']['sender_item_id']
+            
+            await db.transactions.update_one(
+                {"paypal_payout_id": payout_item_id},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "completed_at": datetime.utcnow(),
+                        "details": resource
+                    }
+                }
+            )
+            
+        elif event_type == "PAYMENT.PAYOUTS-ITEM.FAILED":
+            # Handle failed payout
+            resource = data['resource']
+            payout_item_id = resource['payout_item']['sender_item_id']
+            
+            # Find transaction and refund user
+            transaction = await db.transactions.find_one({"paypal_payout_id": payout_item_id})
+            if transaction:
+                await db.users.update_one(
+                    {"user_id": transaction['user_id']},
+                    {
+                        "$inc": {
+                            "wallet_balance": transaction['amount'],
+                            "total_withdrawn": -transaction['amount']
+                        }
+                    }
+                )
+                
+                await db.transactions.update_one(
+                    {"transaction_id": transaction['transaction_id']},
+                    {
+                        "$set": {
+                            "status": "failed",
+                            "completed_at": datetime.utcnow(),
+                            "details": resource
+                        }
+                    }
+                )
+        
+        return {"success": True}
+    except Exception as e:
+        print(f"PayPal webhook error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
