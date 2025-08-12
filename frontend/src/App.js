@@ -357,10 +357,12 @@ const StatsCard = ({ title, value, icon, color }) => {
 };
 
 // Modal Components
+
 const DepositModal = ({ isOpen, onClose, onDeposit }) => {
   const [amount, setAmount] = useState('500');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState('mpesa'); // 'mpesa' or 'paypal'
   const { showNotification } = useAppContext();
 
   const handleDeposit = async (e) => {
@@ -369,7 +371,6 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
 
     try {
       const token = localStorage.getItem('token');
-      console.log('DepositModal - Token from localStorage:', token); // LOG
       if (!token) {
         showNotification({
           title: 'Error',
@@ -377,33 +378,48 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
           type: 'error'
         });
         setLoading(false);
-        return; // Exit if no token
+        return;
       }
 
-      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/payments/deposit`, {
+      let endpoint, payload;
+      
+      if (paymentMethod === 'mpesa') {
+        endpoint = '/api/payments/deposit';
+        payload = {
+          amount: parseFloat(amount),
+          phone: phone
+        };
+      } else { // PayPal
+        endpoint = '/api/payments/paypal/create-order';
+        payload = {
+          amount: parseFloat(amount)
+        };
+      }
+
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          amount: parseFloat(amount),
-          phone: phone
-        }),
+        body: JSON.stringify(payload),
       });
 
       const data = await response.json();
-      console.log('Deposit response data:', data); // LOG
 
       if (data.success) {
-        showNotification({
-          title: 'Deposit Initiated!',
-          message: data.message,
-          type: 'success'
-        });
-        // No longer simulating success here. Backend callback will handle actual update.
-        onClose(); // Close modal immediately
-        onDeposit(); // Trigger dashboard refresh for potential immediate visual update (though actual balance update is async via callback)
+        if (paymentMethod === 'paypal' && data.approval_url) {
+          // Redirect to PayPal for payment
+          window.location.href = data.approval_url;
+        } else {
+          showNotification({
+            title: paymentMethod === 'mpesa' ? 'Deposit Initiated!' : 'PayPal Redirect',
+            message: data.message,
+            type: 'success'
+          });
+          onClose();
+          onDeposit();
+        }
       } else {
         showNotification({
           title: 'Error',
@@ -412,7 +428,7 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
         });
       }
     } catch (error) {
-      console.error('Network error during deposit:', error); // LOG
+      console.error('Network error during deposit:', error);
       showNotification({
         title: 'Error',
         message: 'Network error. Please try again.',
@@ -433,6 +449,21 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
         
+        <div className="payment-method-selector">
+          <button
+            className={`payment-method-btn ${paymentMethod === 'mpesa' ? 'active' : ''}`}
+            onClick={() => setPaymentMethod('mpesa')}
+          >
+            <img src="/mpesa-logo.png" alt="M-Pesa" width="60" />
+          </button>
+          <button
+            className={`payment-method-btn ${paymentMethod === 'paypal' ? 'active' : ''}`}
+            onClick={() => setPaymentMethod('paypal')}
+          >
+            <img src="/paypal-logo.png" alt="PayPal" width="80" />
+          </button>
+        </div>
+
         <form onSubmit={handleDeposit}>
           <div className="form-group">
             <label>Amount (KSH)</label>
@@ -447,25 +478,40 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
             />
           </div>
           
-          <div className="form-group">
-            <label>M-Pesa Phone Number</label>
-            <input
-              type="tel"
-              placeholder="254XXXXXXXXX"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              required
-              className="form-input"
-            />
-          </div>
+          {paymentMethod === 'mpesa' && (
+            <div className="form-group">
+              <label>M-Pesa Phone Number</label>
+              <input
+                type="tel"
+                placeholder="254XXXXXXXXX"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                required
+                className="form-input"
+              />
+            </div>
+          )}
 
           <div className="deposit-info">
-            <p>📱 You will receive an M-Pesa prompt on your phone</p>
-            <p>⏱️ Complete the payment within 5 minutes</p>
+            {paymentMethod === 'mpesa' ? (
+              <>
+                <p>📱 You will receive an M-Pesa prompt on your phone</p>
+                <p>⏱️ Complete the payment within 5 minutes</p>
+              </>
+            ) : (
+              <>
+                <p>🔒 Secure PayPal payment</p>
+                <p>🌍 Accepts international cards</p>
+              </>
+            )}
           </div>
 
           <button type="submit" className="btn-primary" disabled={loading}>
-            {loading ? 'Processing...' : 'Initiate Deposit'}
+            {loading 
+              ? 'Processing...' 
+              : paymentMethod === 'mpesa' 
+                ? 'Initiate Deposit' 
+                : 'Pay with PayPal'}
           </button>
         </form>
       </div>
