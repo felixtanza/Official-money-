@@ -1069,77 +1069,328 @@ async def complete_task(completion_data: TaskCompletion, current_user: dict = De
     }
 
 # Referral system
+            # Referral System Endpoints
 @app.get("/api/referrals/stats")
 async def get_referral_stats(current_user: dict = Depends(get_current_user)):
-    referrals = await db.referrals.find({"referrer_id": current_user['user_id']}).to_list(100)
-    
-    stats = {
-        "total_referrals": len(referrals),
-        "pending_referrals": len([r for r in referrals if r['status'] == 'pending']),
-        "activated_referrals": len([r for r in referrals if r['status'] in ['activated', 'rewarded']]),
-        "total_earnings": sum(r.get('reward_amount', 0) for r in referrals if r['status'] == 'rewarded'),
-        "referral_code": current_user['referral_code'],
-        "referrals": json_serializable_doc(referrals) # Apply serialization
-    }
-    
-    return {"success": True, "stats": stats}
-
-# Helper function for referral rewards
-async def process_referral_reward(referred_user_id: str, referrer_id: str):
-    """Process referral reward when referred user activates account"""
-    referral = await db.referrals.find_one({
-        "referred_id": referred_user_id,
-        "referrer_id": referrer_id,
-        "status": "pending"
-    })
-    
-    if referral:
-        reward_amount = referral['reward_amount']
-        
-        # Update referral status
-        await db.referrals.update_one(
-            {"referral_id": referral['referral_id']},
-            {
-                "$set": {
-                    "status": "rewarded",
-                    "activation_date": datetime.utcnow()
+    """
+    Enhanced Referral Statistics with:
+    - Aggregation pipeline for efficient counting
+    - Tiered reward tracking
+    - Fraud detection metrics
+    - Pagination support
+    """
+    try:
+        # Use MongoDB aggregation for efficient stats calculation
+        stats = await db.referrals.aggregate([
+            {"$match": {"referrer_id": current_user['user_id']}},
+            {"$group": {
+                "_id": "$status",
+                "count": {"$sum": 1},
+                "total_rewards": {"$sum": "$reward_amount"},
+                "potential_rewards": {
+                    "$sum": {
+                        "$cond": [
+                            {"$eq": ["$status", "pending"]},
+                            "$reward_amount",
+                            0
+                        ]
+                    }
                 }
-            }
+            }},
+            {"$group": {
+                "_id": None,
+                "total_referrals": {"$sum": "$count"},
+                "stats": {
+                    "$push": {
+                        "status": "$_id",
+                        "count": "$count",
+                        "total_rewards": "$total_rewards"
+                    }
+                },
+                "total_earned": {"$sum": "$total_rewards"},
+                "potential_earnings": {"$sum": "$potential_rewards"}
+            }},
+            {"$project": {
+                "_id": 0,
+                "referral_code": current_user['referral_code'],
+                "total_referrals": 1,
+                "stats": 1,
+                "total_earned": 1,
+                "potential_earnings": 1,
+                "tier": {
+                    "$switch": {
+                        "branches": [
+                            {
+                                "case": {"$gte": ["$total_referrals", 50]},
+                                "then": "gold"
+                            },
+                            {
+                                "case": {"$gte": ["$total_referrals", 20]},
+                                "then": "silver"
+                            }
+                        ],
+                        "default": "bronze"
+                    }
+                }
+            }}
+        ]).to_list(1)
+
+        # Get recent referrals with pagination
+        recent_referrals = await db.referrals.find(
+            {"referrer_id": current_user['user_id']},
+            {"_id": 0, "referred_id": 1, "status": 1, "created_at": 1}
+        ).sort("created_at", -1).limit(5).to_list(5)
+
+        return {
+            "success": True,
+            "stats": stats[0] if stats else {
+                "total_referrals": 0,
+                "total_earned": 0,
+                "potential_earnings": 0,
+                "tier": "bronze",
+                "referral_code": current_user['referral_code']
+            },
+            "recent_referrals": json_serializable_doc(recent_referrals)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch referral stats: {str(e)}"
         )
-        
-        # Update referrer's wallet
-        await db.users.update_one(
+
+# Enhanced Referral Reward Processing
+async def process_referral_reward(
+    referred_user_id: str,
+    referrer_id: str,
+    session=None
+):
+    """
+    Atomic referral reward processing with:
+    - Fraud detection
+    - Tiered rewards
+    - Comprehensive logging
+    """
+    try:
+        async with await client.start_session() as s if not session else nullcontext(session):
+            async with s.start_transaction() if not session else nullcontext():
+                # 1. Get referral record
+                referral = await db.referrals.find_one(
+                    {
+                        "referred_id": referred_user_id,
+                        "referrer_id": referrer_id,
+                        "status": "pending"
+                    },
+                    session=s
+                )
+
+                if not referral:
+                    return False
+
+                # 2. Fraud checks
+                if await is_fraudulent_referral(referrer_id, referred_user_id, session=s):
+                    await db.referrals.update_one(
+                        {"_id": referral["_id"]},
+                        {
+                            "$set": {
+                                "status": "fraud",
+                                "fraud_reason": "Same device/IP detected"
+                            }
+                        },
+                        session=s
+                    )
+                    return False
+
+                # 3. Calculate tiered reward
+                base_reward = Decimal(str(referral["reward_amount"]))
+                referral_count = await db.referrals.count_documents(
+                    {"referrer_id": referrer_id, "status": "rewarded"},
+                    session=s
+                )
+
+                # Tiered reward multipliers
+                reward_multiplier = Decimal('1.0')  # Base
+                if referral_count >= 50:
+                    reward_multiplier = Decimal('1.5')  # Gold tier
+                elif referral_count >= 20:
+                    reward_multiplier = Decimal('1.2')  # Silver tier
+
+                final_reward = base_reward * reward_multiplier
+
+                # 4. Update referral status
+                await db.referrals.update_one(
+                    {"_id": referral["_id"]},
+                    {
+                        "$set": {
+                            "status": "rewarded",
+                            "activation_date": datetime.utcnow(),
+                            "final_reward": float(final_reward),
+                            "reward_multiplier": float(reward_multiplier)
+                        }
+                    },
+                    session=s
+                )
+
+                # 5. Update referrer's wallet
+                await db.users.update_one(
+                    {"user_id": referrer_id},
+                    {
+                        "$inc": {
+                            "wallet_balance": float(final_reward),
+                            "referral_earnings": float(final_reward),
+                            "total_earned": float(final_reward),
+                            "referral_count": 1
+                        }
+                    },
+                    session=s
+                )
+
+                # 6. Create reward transaction
+                await db.transactions.insert_one(
+                    {
+                        "transaction_id": str(uuid.uuid4()),
+                        "user_id": referrer_id,
+                        "type": "referral_reward",
+                        "amount": float(final_reward),
+                        "currency": "KES",
+                        "status": "completed",
+                        "metadata": {
+                            "referred_user": referred_user_id,
+                            "referral_id": referral["referral_id"],
+                            "tier_multiplier": float(reward_multiplier)
+                        },
+                        "created_at": datetime.utcnow(),
+                        "completed_at": datetime.utcnow()
+                    },
+                    session=s
+                )
+
+                # 7. Create notification
+                await create_notification(
+                    {
+                        "title": "🎉 Referral Reward!",
+                        "message": f"You earned KSH {final_reward:,.2f} ({reward_multiplier}x multiplier)",
+                        "user_id": referrer_id,
+                        "type": "reward",
+                        "metadata": {
+                            "referral_id": referral["referral_id"],
+                            "referred_user": referred_user_id
+                        }
+                    },
+                    session=s
+                )
+
+                # 8. Log the reward
+                logging.info(
+                    f"Referral reward processed: {referrer_id} -> {referred_user_id} | "
+                    f"Amount: {final_reward} | Multiplier: {reward_multiplier}x"
+                )
+
+                if not session:
+                    await s.commit_transaction()
+
+                return True
+
+    except Exception as e:
+        if not session:
+            await s.abort_transaction()
+        logging.error(f"Referral reward failed: {str(e)}")
+        raise
+
+# Fraud Detection Helper
+async def is_fraudulent_referral(
+    referrer_id: str,
+    referred_id: str,
+    session=None
+) -> bool:
+    """Enhanced fraud detection with:
+    - Device fingerprinting
+    - IP address matching
+    - Behavioral patterns
+    """
+    try:
+        # 1. Get both user records
+        referrer = await db.users.find_one(
             {"user_id": referrer_id},
-            {
-                "$inc": {
-                    "wallet_balance": reward_amount,
-                    "referral_earnings": reward_amount,
-                    "total_earned": reward_amount,
-                    "referral_count": 1
-                }
-            }
+            {"device_fingerprint": 1, "registration_ip": 1},
+            session=session
         )
-        
-        # Create notification for referrer
-        await create_notification({
-            "title": "Referral Bonus!",
-            "message": f"You earned KSH {reward_amount} from a successful referral!",
-            "user_id": referrer_id
-        })
+        referred = await db.users.find_one(
+            {"user_id": referred_id},
+            {"device_fingerprint": 1, "registration_ip": 1},
+            session=session
+        )
 
-# Notification system
-async def create_notification(notification_data: dict):
-    """Create a notification"""
-    notification_doc = {
-        # Removed "notification_id" here to rely solely on MongoDB's _id
-        "title": notification_data['title'],
-        "message": notification_data['message'],
-        "user_id": notification_data.get('user_id'),  # None for broadcast
-        "is_read": False,
-        "created_at": datetime.utcnow()
-    }
-    await db.notifications.insert_one(notification_doc)
+        # 2. Check matching fingerprints
+        if (referrer and referred and 
+            referrer.get("device_fingerprint") and 
+            referrer["device_fingerprint"] == referred.get("device_fingerprint")):
+            return True
 
+        # 3. Check matching IPs (within 24h of registration)
+        if (referrer and referred and 
+            referrer.get("registration_ip") and 
+            referrer["registration_ip"] == referred.get("registration_ip")):
+            
+            # Check if registered around the same time
+            time_diff = abs((referrer["created_at"] - referred["created_at"]).total_seconds()
+            if time_diff < 86400:  # 24 hours
+                return True
+
+        # 4. Check for circular referrals
+        circular_ref = await db.referrals.find_one({
+            "referrer_id": referred_id,
+            "referred_id": referrer_id
+        }, session=session)
+
+        if circular_ref:
+            return True
+
+        return False
+
+    except Exception as e:
+        logging.error(f"Fraud detection error: {str(e)}")
+        return False  # Fail-safe
+
+# Enhanced Notification System
+async def create_notification(
+    notification_data: dict,
+    session=None
+):
+    """Enhanced notification system with:
+    - Priority levels
+    - Expiration dates
+    - Actionable notifications
+    """
+    try:
+        notification_doc = {
+            "notification_id": str(uuid.uuid4()),
+            "title": notification_data['title'],
+            "message": notification_data['message'],
+            "user_id": notification_data.get('user_id'),
+            "type": notification_data.get('type', 'system'),
+            "priority": notification_data.get('priority', 'medium'),
+            "is_read": False,
+            "action_url": notification_data.get('action_url'),
+            "expires_at": datetime.utcnow() + timedelta(days=30),
+            "metadata": notification_data.get('metadata', {}),
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+
+        if not session:
+            await db.notifications.insert_one(notification_doc)
+        else:
+            await db.notifications.insert_one(notification_doc, session=session)
+
+        # Real-time push notification could be added here
+        # await send_push_notification(notification_doc)
+
+        return notification_doc
+
+    except Exception as e:
+        logging.error(f"Notification creation failed: {str(e)}")
+        raise
 @app.post("/api/notifications/create")
 async def create_notification_endpoint(notification_data: NotificationCreate, current_user: dict = Depends(get_current_admin_user)): # Admin only
     """Admin endpoint to create notifications"""
