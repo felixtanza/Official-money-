@@ -473,11 +473,13 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
   );
 };
 
+
+
 const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
   // Shared state
   const [loading, setLoading] = useState(false);
   const [activeMethod, setActiveMethod] = useState('mpesa');
-  const { showNotification } = useAppContext();
+  const [error, setError] = useState('');
 
   // M-Pesa state
   const [mpesaAmount, setMpesaAmount] = useState('');
@@ -489,26 +491,46 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
 
   // Conversion constants
   const KSH_TO_USD_RATE = 0.0077;
-  const MIN_MPESA = 100; // 100 KES
-  const MIN_PAYPAL = 1000; // 1,000 KES
+  const MIN_MPESA = 100;
+  const MIN_PAYPAL = 1000;
+
+  // Reset form when modal opens/closes or method changes
+  useEffect(() => {
+    setMpesaAmount('');
+    setMpesaPhone('');
+    setPaypalAmount('');
+    setPaypalEmail('');
+    setError('');
+  }, [isOpen, activeMethod]);
 
   // Calculate USD amounts
-  const mpesaUsdValue = (parseFloat(mpesaAmount) || 0 * KSH_TO_USD_RATE).toFixed(2);
-  const paypalUsdValue = (parseFloat(paypalAmount) || 0 * KSH_TO_USD_RATE).toFixed(2);
-  const totalUsdBalance = (user.wallet_balance * KSH_TO_USD_RATE).toFixed(2);
+  const calculateUsd = (kesAmount) => {
+    const amount = parseFloat(kesAmount) || 0;
+    return (amount * KSH_TO_USD_RATE).toFixed(2);
+  };
 
   // Handle M-Pesa withdrawal
   const handleMpesaWithdraw = async (e) => {
     e.preventDefault();
     setLoading(true);
+    setError('');
 
     try {
-      const token = localStorage.getItem('token');
+      // Validate inputs
+      if (!mpesaAmount || parseFloat(mpesaAmount) < MIN_MPESA) {
+        throw new Error(`Minimum withdrawal is KSH ${MIN_MPESA}`);
+      }
+
+      if (!mpesaPhone || !/^254\d{9}$/.test(mpesaPhone)) {
+        throw new Error('Please enter a valid M-Pesa number (254XXXXXXXXX)');
+      }
+
+      // Simulate API call (replace with your actual endpoint)
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/payments/mpesa-withdraw`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },
         body: JSON.stringify({
           amount: parseFloat(mpesaAmount),
@@ -517,27 +539,13 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
       });
 
       const data = await response.json();
-      if (data.success) {
-        showNotification({
-          title: 'Success!',
-          message: `KSH ${mpesaAmount} withdrawal to M-Pesa requested`,
-          type: 'success'
-        });
-        onWithdraw();
-        onClose();
-      } else {
-        showNotification({
-          title: 'Error',
-          message: data.message || 'M-Pesa withdrawal failed',
-          type: 'error'
-        });
-      }
-    } catch (error) {
-      showNotification({
-        title: 'Error',
-        message: 'Network error. Please try again.',
-        type: 'error'
-      });
+      if (!response.ok) throw new Error(data.message || 'Withdrawal failed');
+
+      onWithdraw(); // Update parent component
+      onClose(); // Close modal
+      alert(`Success! KSH ${mpesaAmount} withdrawal to ${mpesaPhone} requested`);
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -547,44 +555,40 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
   const handlePaypalWithdraw = async (e) => {
     e.preventDefault();
     setLoading(true);
+    setError('');
 
     try {
-      const token = localStorage.getItem('token');
+      // Validate inputs
+      if (!paypalAmount || parseFloat(paypalAmount) < MIN_PAYPAL) {
+        throw new Error(`Minimum PayPal withdrawal is KSH ${MIN_PAYPAL}`);
+      }
+
+      if (!paypalEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(paypalEmail)) {
+        throw new Error('Please enter a valid PayPal email');
+      }
+
+      // Simulate API call (replace with your actual endpoint)
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/payments/paypal-withdraw`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },
         body: JSON.stringify({
           amount: parseFloat(paypalAmount),
           email: paypalEmail,
-          usd_amount: paypalUsdValue
+          usd_amount: calculateUsd(paypalAmount)
         }),
       });
 
       const data = await response.json();
-      if (data.success) {
-        showNotification({
-          title: 'Success!',
-          message: `$${paypalUsdValue} sent to PayPal (${paypalEmail})`,
-          type: 'success'
-        });
-        onWithdraw();
-        onClose();
-      } else {
-        showNotification({
-          title: 'Error',
-          message: data.message || 'PayPal withdrawal failed',
-          type: 'error'
-        });
-      }
-    } catch (error) {
-      showNotification({
-        title: 'Error',
-        message: 'Network error. Please try again.',
-        type: 'error'
-      });
+      if (!response.ok) throw new Error(data.message || 'PayPal transfer failed');
+
+      onWithdraw(); // Update parent component
+      onClose(); // Close modal
+      alert(`Success! $${calculateUsd(paypalAmount)} sent to ${paypalEmail}`);
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -593,11 +597,11 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal animated-card">
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h3>💸 Withdraw Money</h3>
-          <button className="modal-close" onClick={onClose}>×</button>
+          <h3>Withdraw Funds</h3>
+          <button className="close-button" onClick={onClose}>×</button>
         </div>
 
         /* Method selector tabs */
@@ -616,15 +620,15 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
           </button>
         </div>
 
+        /* Error message display */
+        {error && <div className="error-message">{error}</div>}
+
         /* M-Pesa Withdrawal Form */
         {activeMethod === 'mpesa' && (
           <form onSubmit={handleMpesaWithdraw}>
-            <div className="form-group">
-              <label>Available Balance</label>
-              <div className="balance-display">
-                <span>KSH {user.wallet_balance.toFixed(2)}</span>
-                <span className="usd-amount">≈${totalUsdBalance} USD</span>
-              </div>
+            <div className="balance-display">
+              <span>Available: KSH {user.wallet_balance.toFixed(2)}</span>
+              <span className="usd-amount">≈${calculateUsd(user.wallet_balance)} USD</span>
             </div>
 
             <div className="form-group">
@@ -640,9 +644,9 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
                 required
               />
               <div className="amount-info">
-                <small>Minimum: KSH {MIN_MPESA}</small>
+                <span>Minimum: KSH {MIN_MPESA}</span>
                 {mpesaAmount && (
-                  <small className="usd-amount">≈${mpesaUsdValue} USD</small>
+                  <span className="usd-amount">≈${calculateUsd(mpesaAmount)} USD</span>
                 )}
               </div>
             </div>
@@ -656,18 +660,26 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
                 onChange={(e) => setMpesaPhone(e.target.value)}
                 className="form-input"
                 required
+                pattern="254\d{9}"
+                title="Format: 254XXXXXXXXX"
               />
             </div>
 
             <button
               type="submit"
-              className="btn-primary"
+              className="submit-button"
               disabled={loading || !mpesaAmount || !mpesaPhone}
             >
-              {loading ? 'Processing...' : 'Withdraw via M-Pesa'}
+              {loading ? (
+                <>
+                  <span className="spinner"></span> Processing...
+                </>
+              ) : (
+                'Withdraw via M-Pesa'
+              )}
             </button>
 
-            <div className="withdraw-info">
+            <div className="info-text">
               <p>⏳ Processing time: 24-48 hours</p>
               <p>💰 Money will be sent to your M-Pesa account</p>
             </div>
@@ -677,12 +689,9 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
         /* PayPal Withdrawal Form */
         {activeMethod === 'paypal' && (
           <form onSubmit={handlePaypalWithdraw}>
-            <div className="form-group">
-              <label>Available Balance</label>
-              <div className="balance-display">
-                <span>KSH {user.wallet_balance.toFixed(2)}</span>
-                <span className="usd-amount">≈${totalUsdBalance} USD</span>
-              </div>
+            <div className="balance-display">
+              <span>Available: KSH {user.wallet_balance.toFixed(2)}</span>
+              <span className="usd-amount">≈${calculateUsd(user.wallet_balance)} USD</span>
             </div>
 
             <div className="form-group">
@@ -698,18 +707,18 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
                 required
               />
               <div className="amount-info">
-                <small>Minimum: KSH {MIN_PAYPAL}</small>
+                <span>Minimum: KSH {MIN_PAYPAL}</span>
                 {paypalAmount && (
-                  <small className="usd-amount">≈${paypalUsdValue} USD</small>
+                  <span className="usd-amount">≈${calculateUsd(paypalAmount)} USD</span>
                 )}
               </div>
             </div>
 
             <div className="form-group">
-              <label>PayPal Email Address</label>
+              <label>PayPal Email</label>
               <input
                 type="email"
-                placeholder="your@paypal.email"
+                placeholder="your@paypal.com"
                 value={paypalEmail}
                 onChange={(e) => setPaypalEmail(e.target.value)}
                 className="form-input"
@@ -719,13 +728,19 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
 
             <button
               type="submit"
-              className="btn-primary"
+              className="submit-button"
               disabled={loading || !paypalAmount || !paypalEmail}
             >
-              {loading ? 'Processing...' : 'Withdraw via PayPal'}
+              {loading ? (
+                <>
+                  <span className="spinner"></span> Processing...
+                </>
+              ) : (
+                'Withdraw via PayPal'
+              )}
             </button>
 
-            <div className="withdraw-info">
+            <div className="info-text">
               <p>⚡ Instant transfer to your PayPal account</p>
               <p>💳 Withdraw to your bank or card from PayPal</p>
             </div>
@@ -735,6 +750,9 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
     </div>
   );
 };
+
+            
+              
 
 // Main Dashboard Component (for regular users)
 const Dashboard = ({ user, onLogout }) => {
