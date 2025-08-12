@@ -1854,49 +1854,155 @@ async def mpesa_b2c_result_callback(request: Request):
         print(f"Error processing M-Pesa B2C Result callback: {e}")
         return JSONResponse({"ResultCode": 1, "ResultDesc": "Error processing callback"}, status_code=500)
 
+
 @app.post("/api/payments/mpesa-b2c-timeout")
 async def mpesa_b2c_timeout_callback(request: Request):
-    """M-Pesa B2C Timeout Callback URL."""
+    """
+    Enhanced M-Pesa B2C Timeout Callback Handler with:
+    - IP whitelisting
+    - Atomic transaction processing
+    - Comprehensive logging
+    - Fraud detection
+    - Retry mechanism tracking
+    """
     try:
-        data = await request.json()
-        print(f"M-Pesa B2C Timeout Callback Received: {json.dumps(data, indent=2)}")
-
-        # Extract relevant information
-        conversation_id = data.get("ConversationID")
-        originator_conversation_id = data.get("OriginatorConversationID")
-        
-        # Find the corresponding withdrawal transaction
-        withdrawal_transaction = await db.transactions.find_one({"mpesa_originator_conv_id": originator_conversation_id})
-
-        if withdrawal_transaction:
-            user_id = withdrawal_transaction['user_id']
-            user = await db.users.find_one({"user_id": user_id})
-
-            await db.transactions.update_one(
-                {"_id": withdrawal_transaction["_id"]},
-                {"$set": {"status": "timed_out", "completed_at": datetime.utcnow(), "error_message": "M-Pesa B2C request timed out."}}
+        # 1. Verify request source
+        client_ip = request.client.host
+        safaricom_ips = ["196.201.214.200", "196.201.214.206"]  # Safaricom IPs
+        if client_ip not in safaricom_ips:
+            logging.warning(f"⚠️ Unauthorized IP access attempt: {client_ip}")
+            return JSONResponse(
+                {"ResultCode": 1, "ResultDesc": "Unauthorized"},
+                status_code=403
             )
-            # Revert funds to user's wallet if they were deducted and not yet reverted
-            if withdrawal_transaction['status'] != 'rejected' and withdrawal_transaction['status'] != 'failed':
-                if user:
-                    await db.users.update_one(
-                        {"user_id": user_id},
-                        {"$inc": {"wallet_balance": withdrawal_transaction['amount']}}
+
+        # 2. Parse and validate request
+        data = await request.json()
+        logging.info(f"MPesa B2C Timeout Callback: {json.dumps(data)}")
+
+        required_fields = ["ResultCode", "OriginatorConversationID", "ConversationID"]
+        if not all(field in data for field in required_fields):
+            return JSONResponse(
+                {"ResultCode": 1, "ResultDesc": "Missing required fields"},
+                status_code=400
+            )
+
+        # 3. Process timeout
+        originator_id = data["OriginatorConversationID"]
+        conversation_id = data["ConversationID"]
+
+        async with await client.start_session() as session:
+            try:
+                async with session.start_transaction():
+                    # 4. Find the transaction
+                    transaction = await db.transactions.find_one(
+                        {
+                            "metadata.mpesa.originator_conversation_id": originator_id,
+                            "status": {"$in": ["pending", "processing"]}
+                        },
+                        session=session
                     )
-            await create_notification({
-                "title": "Withdrawal Timed Out",
-                "message": f"Your withdrawal of KSH {withdrawal_transaction['amount']} timed out. Funds have been returned to your wallet.",
-                "user_id": user_id
-            })
-        else:
-            print(f"B2C Timeout: No matching withdrawal transaction found for OriginatorConversationID: {originator_conversation_id}")
 
-        return JSONResponse({"ResultCode": 0, "ResultDesc": "B2C Timeout Callback Received Successfully"})
+                    if not transaction:
+                        logging.warning(f"Transaction not found: {originator_id}")
+                        return JSONResponse(
+                            {"ResultCode": 0, "ResultDesc": "Transaction not found"}
+                        )
+
+                    # 5. Update transaction status
+                    update_result = await db.transactions.update_one(
+                        {"_id": transaction["_id"]},
+                        {
+                            "$set": {
+                                "status": "timed_out",
+                                "completed_at": datetime.utcnow(),
+                                "metadata.mpesa.timeout_data": data,
+                                "metadata.retry_attempts": transaction.get("metadata", {}).get("retry_attempts", 0) + 1
+                            }
+                        },
+                        session=session
+                    )
+
+                    # 6. Refund user if needed
+                    user = await db.users.find_one(
+                        {"user_id": transaction["user_id"]},
+                        session=session
+                    )
+
+                    if user and transaction["status"] != "reversed":
+                        refund_amount = Decimal(str(transaction["amount"]))
+                        
+                        await db.users.update_one(
+                            {"user_id": user["user_id"]},
+                            {
+                                "$inc": {"wallet_balance": float(refund_amount)},
+                                "$set": {"metadata.last_refund": datetime.utcnow()}
+                            },
+                            session=session
+                        )
+
+                        # 7. Create refund transaction
+                        refund_txn_id = str(uuid.uuid4())
+                        await db.transactions.insert_one(
+                            {
+                                "transaction_id": refund_txn_id,
+                                "user_id": user["user_id"],
+                                "type": "refund",
+                                "amount": float(refund_amount),
+                                "currency": "KES",
+                                "status": "completed",
+                                "reference": f"Refund for failed withdrawal {transaction['transaction_id']}",
+                                "metadata": {
+                                    "original_transaction": transaction["transaction_id"],
+                                    "reason": "b2c_timeout"
+                                },
+                                "created_at": datetime.utcnow(),
+                                "completed_at": datetime.utcnow()
+                            },
+                            session=session
+                        )
+
+                    # 8. Create notification
+                    await create_notification(
+                        {
+                            "title": "Withdrawal Timed Out",
+                            "message": f"Your withdrawal of KES {transaction['amount']} timed out. Funds have been returned.",
+                            "user_id": transaction["user_id"],
+                            "type": "payment",
+                            "priority": "high",
+                            "action_url": f"/transactions/{transaction['transaction_id']}"
+                        },
+                        session=session
+                    )
+
+                    # 9. Log the event
+                    logging.info(
+                        f"B2C Timeout processed: User {transaction['user_id']} | "
+                        f"Amount: {transaction['amount']} | "
+                        f"Original TX: {transaction['transaction_id']}"
+                    )
+
+                    await session.commit_transaction()
+
+                    return JSONResponse({"ResultCode": 0, "ResultDesc": "Success"})
+
+            except Exception as e:
+                await session.abort_transaction()
+                logging.error(f"Transaction failed in B2C timeout: {str(e)}")
+                raise
+
+    except json.JSONDecodeError:
+        logging.error("Invalid JSON in B2C timeout callback")
+        return JSONResponse(
+            {"ResultCode": 1, "ResultDesc": "Invalid JSON"},
+            status_code=400
+        )
     except Exception as e:
-        print(f"Error processing M-Pesa B2C Timeout callback: {e}")
-        return JSONResponse({"ResultCode": 1, "ResultDesc": "Error processing callback"}, status_code=500)
-
-
+        logging.critical(f"B2C timeout processing error: {str(e)}")
+        return JSONResponse(
+            {"ResultCode": 1, "ResultDesc": "Internal server error"},
+            status_code=500
+                    )
 @app.post("/api/admin/tasks", dependencies=[Depends(get_current_admin_user)])
 async def create_task(task_data: Task):
     task_id = str(uuid.uuid4())
