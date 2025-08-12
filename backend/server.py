@@ -556,110 +556,300 @@ async def initiate_deposit(deposit_data: DepositRequest, current_user: dict = De
 
 # NOTE: This endpoint is crucial for real M-Pesa integration.
 # M-Pesa will send a callback to this URL to confirm payment status.
+
 @app.post("/api/payments/mpesa-callback")
 async def mpesa_callback(request: Request):
     """
-    M-Pesa C2B/STK Push Callback URL.
-    This endpoint receives confirmation from Safaricom about a transaction.
+    Enhanced M-Pesa Callback Handler with:
+    - IP Whitelisting
+    - Request Validation
+    - Atomic Transactions
+    - Fraud Checks
+    - Comprehensive Logging
     """
     try:
+        # 1. Verify the request is from Safaricom IPs
+        client_ip = request.client.host
+        safaricom_ips = ["196.201.214.200", "196.201.214.206"]  # Add all Safaricom IPs
+        if client_ip not in safaricom_ips:
+            print(f"⚠️ Unauthorized IP access attempt: {client_ip}")
+            return JSONResponse(
+                {"ResultCode": 1, "ResultDesc": "Unauthorized"},
+                status_code=403
+            )
+
+        # 2. Parse and validate request
         data = await request.json()
-        print(f"M-Pesa Callback Received: {json.dumps(data, indent=2)}")
+        logging.info(f"MPesa Callback Received: {json.dumps(data)}")
 
-        # Process the callback data
-        # Example for STK Push Callback:
-        if data.get("Body") and data["Body"].get("stkCallback"):
-            stk_callback = data["Body"]["stkCallback"]
-            checkout_request_id = stk_callback["CheckoutRequestID"]
-            result_code = stk_callback["ResultCode"]
-            result_desc = stk_callback["ResultDesc"]
-            
-            transaction_status = "failed"
-            mpesa_receipt = None
-            amount = 0.0
-            phone_number = None
+        if not data.get("Body", {}).get("stkCallback"):
+            return JSONResponse(
+                {"ResultCode": 1, "ResultDesc": "Invalid callback format"},
+                status_code=400
+            )
 
-            if result_code == 0:
-                # Successful transaction
-                transaction_status = "completed"
-                callback_metadata = stk_callback.get("CallbackMetadata", {}).get("Item", [])
-                
-                for item in callback_metadata:
-                    if item["Name"] == "MpesaReceiptNumber":
-                        mpesa_receipt = item["Value"]
-                    elif item["Name"] == "Amount":
-                        amount = float(item["Value"])
-                    elif item["Name"] == "PhoneNumber":
-                        phone_number = str(item["Value"]) # Safaricom sends 254 format
+        callback = data["Body"]["stkCallback"]
+        required_fields = ["CheckoutRequestID", "ResultCode", "CallbackMetadata"]
+        if not all(field in callback for field in required_fields):
+            return JSONResponse(
+                {"ResultCode": 1, "ResultDesc": "Missing required fields"},
+                status_code=400
+            )
 
-                # Find the pending transaction in your DB
-                transaction = await db.transactions.find_one({"CheckoutRequestID": checkout_request_id, "status": "pending"})
-                if transaction:
-                    # Update transaction status
-                    await db.transactions.update_one(
-                        {"_id": transaction["_id"]},
+        # 3. Process callback
+        checkout_id = callback["CheckoutRequestID"]
+        result_code = int(callback["ResultCode"])
+        result_desc = callback["ResultDesc"]
+
+        async with await client.start_session() as session:
+            try:
+                async with session.start_transaction():
+                    # 4. Find transaction
+                    transaction = await db.transactions.find_one(
                         {
-                            "$set": {
-                                "status": transaction_status,
-                                "completed_at": datetime.utcnow(),
-                                "mpesa_receipt": mpesa_receipt,
-                                "amount": amount, # Update amount from callback for accuracy
-                                "phone": phone_number # Update phone from callback for accuracy
-                            }
-                        }
+                            "metadata.mpesa.checkout_request_id": checkout_id,
+                            "status": "pending"
+                        },
+                        session=session
                     )
 
-                    # Update user wallet and activation status
-                    user = await db.users.find_one({"user_id": transaction['user_id']})
-                    if user:
-                        new_balance = user['wallet_balance'] + amount
-                        update_data = {"wallet_balance": new_balance}
+                    if not transaction:
+                        logging.warning(f"Transaction not found: {checkout_id}")
+                        return JSONResponse(
+                            {"ResultCode": 0, "ResultDesc": "Transaction not found"}
+                        )
+
+                    # 5. Handle success/failure
+                    if result_code == 0:  # Success
+                        metadata = {item["Name"]: item["Value"] for item in callback["CallbackMetadata"]["Item"]}
                         
-                        if not user['is_activated'] and amount >= user.get('activation_amount', 500.0):
-                            update_data['is_activated'] = True
-                            # Process referral reward if user was referred
-                            if user.get('referred_by'):
-                                await process_referral_reward(user['user_id'], user['referred_by'])
-                        
-                        await db.users.update_one(
-                            {"user_id": user['user_id']},
-                            {"$set": update_data}
+                        # Update transaction
+                        update_result = await db.transactions.update_one(
+                            {"_id": transaction["_id"]},
+                            {
+                                "$set": {
+                                    "status": "completed",
+                                    "completed_at": datetime.utcnow(),
+                                    "metadata.mpesa.receipt_number": metadata.get("MpesaReceiptNumber"),
+                                    "amount": float(metadata.get("Amount", transaction["amount"])),
+                                    "metadata.mpesa.phone_number": metadata.get("PhoneNumber")
+                                }
+                            },
+                            session=session
+                        )
+
+                        # Update user balance
+                        amount = float(metadata.get("Amount", transaction["amount"]))
+                        user_update = await db.users.update_one(
+                            {"user_id": transaction["user_id"]},
+                            {
+                                "$inc": {"wallet_balance": amount},
+                                "$set": {
+                                    "payment_methods.mpesa.phone": metadata.get("PhoneNumber"),
+                                    "payment_methods.mpesa.verified": True
+                                }
+                            },
+                            session=session
+                        )
+
+                        # Check activation and process referrals
+                        user = await db.users.find_one(
+                            {"user_id": transaction["user_id"]},
+                            session=session
                         )
                         
-                        await create_notification({
-                            "title": "Deposit Successful!",
-                            "message": f"Your deposit of KSH {amount} has been processed successfully. Receipt: {mpesa_receipt}",
-                            "user_id": user['user_id']
-                        })
-                else:
-                    print(f"Transaction with CheckoutRequestID {checkout_request_id} not found or already processed.")
-            else:
-                # Failed transaction
-                transaction = await db.transactions.find_one({"CheckoutRequestID": checkout_request_id, "status": "pending"})
-                if transaction:
-                    await db.transactions.update_one(
-                        {"_id": transaction["_id"]},
-                        {
-                            "$set": {
-                                "status": "failed",
-                                "completed_at": datetime.utcnow(),
-                                "mpesa_receipt": None,
-                                "error_message": result_desc
-                            }
-                        }
-                    )
-                    await create_notification({
-                        "title": "Deposit Failed",
-                        "message": f"Your deposit of KSH {transaction['amount']} failed. Reason: {result_desc}",
-                        "user_id": transaction['user_id']
-                    })
+                        if not user["is_activated"] and user["wallet_balance"] + amount >= user["activation_amount"]:
+                            await db.users.update_one(
+                                {"user_id": user["user_id"]},
+                                {"$set": {"is_activated": True}},
+                                session=session
+                            )
+                            
+                            if user.get("referred_by"):
+                                await process_referral_reward(
+                                    referred_id=user["user_id"],
+                                    referrer_id=user["referred_by"],
+                                    session=session
+                                )
 
-        return JSONResponse({"ResultCode": 0, "ResultDesc": "C2B/STK Push Callback Received Successfully"})
+                        # Create notification
+                        await create_notification(
+                            {
+                                "title": "Deposit Received",
+                                "message": f"KES {amount:,.2f} deposited to your account",
+                                "user_id": transaction["user_id"],
+                                "type": "payment"
+                            },
+                            session=session
+                        )
+
+                        logging.info(f"✅ Successful deposit: {transaction['user_id']} - KES {amount}")
+
+                    else:  # Failure
+                        await db.transactions.update_one(
+                            {"_id": transaction["_id"]},
+                            {
+                                "$set": {
+                                    "status": "failed",
+                                    "completed_at": datetime.utcnow(),
+                                    "metadata.error": result_desc
+                                }
+                            },
+                            session=session
+                        )
+
+                        await create_notification(
+                            {
+                                "title": "Deposit Failed",
+                                "message": f"Deposit failed: {result_desc}",
+                                "user_id": transaction["user_id"],
+                                "type": "payment"
+                            },
+                            session=session
+                        )
+
+                        logging.warning(f"❌ Failed deposit: {transaction['user_id']} - {result_desc}")
+
+                    await session.commit_transaction()
+
+            except Exception as e:
+                await session.abort_transaction()
+                logging.error(f"Transaction failed: {str(e)}")
+                raise
+
+        return JSONResponse({"ResultCode": 0, "ResultDesc": "Success"})
+
+    except json.JSONDecodeError:
+        logging.error("Invalid JSON received")
+        return JSONResponse(
+            {"ResultCode": 1, "ResultDesc": "Invalid JSON"},
+            status_code=400
+        )
+    except Exception as e:
+        logging.critical(f"Callback processing error: {str(e)}")
+        return JSONResponse(
+            {"ResultCode": 1, "ResultDesc": "Internal server error"},
+            status_code=500
+        )
+
+async def process_referral_reward(referred_id: str, referrer_id: str, session=None):
+    """Process referral reward with fraud checks"""
+    try:
+        # 1. Get referral record
+        referral = await db.referrals.find_one(
+            {
+                "referred_id": referred_id,
+                "referrer_id": referrer_id,
+                "status": "pending"
+            },
+            session=session
+        )
+
+        if not referral:
+            return
+
+        reward_amount = Decimal(str(referral["reward_amount"]))
+
+        # 2. Fraud checks
+        if await is_fraudulent_referral(referrer_id, referred_id, session=session):
+            await db.referrals.update_one(
+                {"_id": referral["_id"]},
+                {"$set": {"status": "rejected", "reason": "fraud_check_failed"}},
+                session=session
+            )
+            return
+
+        # 3. Reward referrer
+        await db.users.update_one(
+            {"user_id": referrer_id},
+            {
+                "$inc": {
+                    "wallet_balance": reward_amount,
+                    "referral_earnings": reward_amount,
+                    "total_earned": reward_amount
+                }
+            },
+            session=session
+        )
+
+        # 4. Update referral status
+        await db.referrals.update_one(
+            {"_id": referral["_id"]},
+            {
+                "$set": {
+                    "status": "completed",
+                    "completed_at": datetime.utcnow()
+                }
+            },
+            session=session
+        )
+
+        # 5. Create reward transaction
+        await db.transactions.insert_one(
+            {
+                "transaction_id": str(uuid.uuid4()),
+                "user_id": referrer_id,
+                "type": "referral_reward",
+                "amount": float(reward_amount),
+                "currency": "KES",
+                "status": "completed",
+                "metadata": {
+                    "referred_user": referred_id,
+                    "referral_id": referral["referral_id"]
+                },
+                "created_at": datetime.utcnow(),
+                "completed_at": datetime.utcnow()
+            },
+            session=session
+        )
+
+        # 6. Create notification
+        await create_notification(
+            {
+                "title": "Referral Reward!",
+                "message": f"You earned KES {reward_amount:,.2f} from referral",
+                "user_id": referrer_id,
+                "type": "reward"
+            },
+            session=session
+        )
+
+        logging.info(f"🎉 Referral reward processed: {referrer_id} -> {referred_id}")
 
     except Exception as e:
-        print(f"Error processing M-Pesa callback: {e}")
-        return JSONResponse({"ResultCode": 1, "ResultDesc": "Error processing callback"}, status_code=500)
+        logging.error(f"Referral processing error: {str(e)}")
+        raise
 
+async def is_fraudulent_referral(referrer_id: str, referred_id: str, session=None) -> bool:
+    """Check for potential referral fraud"""
+    # 1. Same user check
+    if referrer_id == referred_id:
+        return True
+    
+    # 2. Device/IP fingerprint check
+    referrer = await db.users.find_one({"user_id": referrer_id}, session=session)
+    referred = await db.users.find_one({"user_id": referred_id}, session=session)
+    
+    matching_fields = []
+    for field in ["device_fingerprint", "registration_ip"]:
+        if referrer.get(field) and referrer[field] == referred.get(field):
+            matching_fields.append(field)
+    
+    if matching_fields:
+        logging.warning(f"Fraud detected - matching {', '.join(matching_fields)}")
+        return True
+    
+    # 3. Velocity check (too many referrals)
+    referral_count = await db.referrals.count_documents(
+        {"referrer_id": referrer_id, "status": "completed"},
+        session=session
+    )
+    
+    if referral_count > 50:  # Adjust threshold as needed
+        logging.warning(f"Excessive referrals: {referrer_id} has {referral_count} referrals")
+        return True
+    
+    return False
 
 @app.post("/api/payments/withdraw")
 async def request_withdrawal(withdrawal_data: WithdrawalRequest, current_user: dict = Depends(get_current_user)):
