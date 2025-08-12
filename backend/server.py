@@ -467,92 +467,188 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     }
 
 # Payment routes
+
 @app.post("/api/payments/deposit")
-async def initiate_deposit(deposit_data: DepositRequest, current_user: dict = Depends(get_current_user)):
-    transaction_id = str(uuid.uuid4())
-    
-    # M-Pesa STK Push Integration
-    # This is where the real M-Pesa STK Push API call would happen
-    # Replace the simulated logic with actual M-Pesa API integration
-    
-    # Get M-Pesa access token
-    access_token = await get_mpesa_access_token()
-    
-    # Generate timestamp and password
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    password = await generate_mpesa_password(timestamp)
-    
-    # Format phone number for M-Pesa (e.g., 2547XXXXXXXX)
-    phone_number = deposit_data.phone
-    if not phone_number.startswith('254'):
-        raise HTTPException(status_code=400, detail="Phone number must start with 254 (Kenya format)")
-
-    # M-Pesa STK Push Payload
-    stk_payload = {
-        "BusinessShortCode": MPESA_LIPA_NA_MPESA_SHORTCODE,
-        "Password": password,
-        "Timestamp": timestamp,
-        "TransactionType": "CustomerPayBillOnline", # Or "CustomerBuyGoodsOnline"
-        "Amount": int(deposit_data.amount), # Amount must be an integer
-        "PartyA": phone_number,
-        "PartyB": MPESA_LIPA_NA_MPESA_SHORTCODE,
-        "PhoneNumber": phone_number,
-        "CallBackURL": "https://official-money.onrender.com/api/payments/mpesa-callback", # IMPORTANT: Replace with your actual callback URL
-        "AccountReference": f"EarnPlatform-{current_user['user_id']}",
-        "TransactionDesc": f"Deposit for user {current_user['email']}"
-    }
-
+async def initiate_deposit(
+    deposit_data: DepositRequest, 
+    current_user: dict = Depends(get_current_user),
+    request: Request = None  # For IP tracking
+):
+    """
+    Enhanced M-Pesa Deposit Endpoint with:
+    - Phone number validation
+    - Amount validation
+    - Rate limiting
+    - IP tracking
+    - Atomic transactions
+    - Comprehensive error handling
+    """
+    # 1. Input Validation
     try:
-        async with httpx.AsyncClient() as client:
-            mpesa_response = await client.post(
-                MPESA_STKPUSH_URL,
-                json=stk_payload,
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/json"
-                },
-                timeout=30.0
+        # Validate phone number format (254XXXXXXXXX)
+        if not re.match(r'^254\d{9}$', deposit_data.phone):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid phone format. Use 254 followed by 9 digits (e.g., 254712345678)"
             )
-            mpesa_response.raise_for_status()
-            mpesa_data = mpesa_response.json()
-            
-            if mpesa_data.get("ResponseCode") == "0":
-                # STK Push initiated successfully
-                transaction_doc = {
-                    "transaction_id": transaction_id,
-                    "user_id": current_user['user_id'],
-                    "type": "deposit",
-                    "amount": deposit_data.amount,
-                    "phone": deposit_data.phone,
-                    "status": "pending", # Status will be updated by M-Pesa callback
-                    "method": "mpesa",
-                    "created_at": datetime.utcnow(),
-                    "completed_at": None,
-                    "mpesa_receipt": None,
-                    "CheckoutRequestID": mpesa_data.get("CheckoutRequestID"),
-                    "CustomerMessage": mpesa_data.get("CustomerMessage")
-                }
-                await db.transactions.insert_one(transaction_doc)
-                
-                return {
-                    "success": True,
-                    "message": f"Deposit of KSH {deposit_data.amount} initiated. Please complete payment on your phone.",
-                    "transaction_id": transaction_id,
-                    "amount": deposit_data.amount,
-                    "phone": deposit_data.phone,
-                    "mpesa_response": mpesa_data # For debugging, remove in production
-                }
-            else:
-                # STK Push initiation failed
-                print(f"M-Pesa STK Push failed: {mpesa_data}")
-                raise HTTPException(status_code=400, detail=mpesa_data.get("CustomerMessage", "M-Pesa STK Push initiation failed"))
 
-    except httpx.HTTPStatusError as e:
-        print(f"M-Pesa STK Push HTTP error: {e.response.status_code} - {e.response.text}")
-        raise HTTPException(status_code=500, detail=f"M-Pesa STK Push failed: {e.response.text}")
+        # Validate amount (minimum 10 KES, maximum 150,000 KES)
+        if not (10 <= deposit_data.amount <= 150000):
+            raise HTTPException(
+                status_code=400,
+                detail="Amount must be between KSH 10 and KSH 150,000"
+            )
+
+        # 2. Check for duplicate pending transactions
+        existing_txn = await db.transactions.find_one({
+            "user_id": current_user['user_id'],
+            "phone": deposit_data.phone,
+            "amount": deposit_data.amount,
+            "status": "pending",
+            "created_at": {"$gt": datetime.utcnow() - timedelta(minutes=15)}
+        })
+
+        if existing_txn:
+            raise HTTPException(
+                status_code=400,
+                detail="Duplicate transaction detected. Please wait for previous request to complete."
+            )
+
+        # 3. Rate limiting check
+        txn_count = await db.transactions.count_documents({
+            "user_id": current_user['user_id'],
+            "created_at": {"$gt": datetime.utcnow() - timedelta(hours=1)}
+        })
+
+        if txn_count >= 5:  # Max 5 transactions per hour
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Please try again later."
+            )
+
+        # 4. Prepare M-Pesa request
+        transaction_id = str(uuid.uuid4())
+        access_token = await get_mpesa_access_token()
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        password = await generate_mpesa_password(timestamp)
+
+        stk_payload = {
+            "BusinessShortCode": MPESA_LIPA_NA_MPESA_SHORTCODE,
+            "Password": password,
+            "Timestamp": timestamp,
+            "TransactionType": "CustomerPayBillOnline",
+            "Amount": int(deposit_data.amount),
+            "PartyA": deposit_data.phone,
+            "PartyB": MPESA_LIPA_NA_MPESA_SHORTCODE,
+            "PhoneNumber": deposit_data.phone,
+            "CallBackURL": f"{settings.BASE_URL}/api/payments/mpesa-callback",
+            "AccountReference": f"USER-{current_user['user_id']}",
+            "TransactionDesc": f"Deposit for {current_user['email']}"
+        }
+
+        # 5. Create transaction record first (prevents callback issues)
+        transaction_doc = {
+            "transaction_id": transaction_id,
+            "user_id": current_user['user_id'],
+            "type": "deposit",
+            "amount": float(deposit_data.amount),
+            "currency": "KES",
+            "phone": deposit_data.phone,
+            "status": "pending",
+            "method": "mpesa",
+            "ip_address": request.client.host if request else None,
+            "device_fingerprint": request.headers.get("User-Agent", ""),
+            "metadata": {
+                "mpesa": {
+                    "checkout_request_id": None,
+                    "receipt_number": None,
+                    "request_payload": stk_payload
+                }
+            },
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+
+        # 6. Atomic operation
+        async with await client.start_session() as session:
+            try:
+                async with session.start_transaction():
+                    # Insert transaction first
+                    await db.transactions.insert_one(
+                        transaction_doc,
+                        session=session
+                    )
+
+                    # Make M-Pesa API call
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        headers = {
+                            "Authorization": f"Bearer {access_token}",
+                            "Content-Type": "application/json"
+                        }
+                        
+                        response = await client.post(
+                            MPESA_STKPUSH_URL,
+                            json=stk_payload,
+                            headers=headers
+                        )
+                        response.raise_for_status()
+                        mpesa_data = response.json()
+
+                        if mpesa_data.get("ResponseCode") != "0":
+                            raise HTTPException(
+                                status_code=400,
+                                detail=mpesa_data.get("CustomerMessage", "M-Pesa request failed")
+                            )
+
+                        # Update transaction with checkout ID
+                        await db.transactions.update_one(
+                            {"transaction_id": transaction_id},
+                            {
+                                "$set": {
+                                    "metadata.mpesa.checkout_request_id": mpesa_data.get("CheckoutRequestID"),
+                                    "metadata.mpesa.raw_response": mpesa_data
+                                }
+                            },
+                            session=session
+                        )
+
+                    await session.commit_transaction()
+
+                    # 7. Return success response
+                    return {
+                        "success": True,
+                        "message": f"Payment request of KSH {deposit_data.amount} sent to {deposit_data.phone}",
+                        "transaction_id": transaction_id,
+                        "checkout_request_id": mpesa_data.get("CheckoutRequestID"),
+                        "user_message": mpesa_data.get("CustomerMessage")
+                    }
+
+            except httpx.HTTPStatusError as e:
+                await session.abort_transaction()
+                error_detail = f"M-Pesa API Error: {e.response.status_code} - {e.response.text}"
+                logging.error(error_detail)
+                raise HTTPException(
+                    status_code=502,
+                    detail="Payment service temporarily unavailable"
+                )
+
+            except Exception as e:
+                await session.abort_transaction()
+                logging.error(f"Deposit processing error: {str(e)}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to process payment request"
+                )
+
+    except HTTPException:
+        raise  # Re-raise our custom exceptions
+
     except Exception as e:
-        print(f"Error initiating M-Pesa STK Push: {e}")
-        raise HTTPException(status_code=500, detail="Error initiating M-Pesa deposit. Please try again.")
+        logging.critical(f"Unexpected error in deposit: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred"
+        )
 
 # NOTE: This endpoint is crucial for real M-Pesa integration.
 # M-Pesa will send a callback to this URL to confirm payment status.
