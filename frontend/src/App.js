@@ -514,13 +514,13 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
             className={`payment-method-btn ${paymentMethod === 'mpesa' ? 'active' : ''}`}
             onClick={() => setPaymentMethod('mpesa')}
           >
-            <img src="/mpesa-logo.png" alt="M-Pesa" width="60" />
+            <img src="/images/mpesa-logo.png" alt="M-Pesa" width="60" />
           </button>
           <button
             className={`payment-method-btn ${paymentMethod === 'paypal' ? 'active' : ''}`}
             onClick={() => setPaymentMethod('paypal')}
           >
-            <img src="/paypal-logo.png" alt="PayPal" width="80" />
+            <img src="/images/paypal-logo.svg" alt="PayPal" width="80" />
           </button>
         </div>
 
@@ -1947,7 +1947,7 @@ const AdminTasksComponent = () => {
                 </td>
                 <td>{new Date(task.created_at).toLocaleDateString()}</td>
                 <td>
-                  {/* Future: Edit Task button */}
+                  /* Future: Edit Task button */
                 </td>
               </tr>
             ))}
