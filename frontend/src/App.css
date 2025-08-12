@@ -1217,7 +1217,7 @@ body {
   }
 }
 /* Method tabs */
-.method-tabs {
+/*.method-tabs {
   display: flex;
   margin-bottom: 20px;
   border-bottom: 1px solid #e1e1e1;
@@ -1238,7 +1238,7 @@ body {
   border-bottom: 2px solid #0070ba;
 }
 
-/* Balance display */
+/* Balance display 
 .balance-display {
   padding: 8px;
   background: #f8f8f8;
@@ -1249,11 +1249,11 @@ body {
 }
 
 .usd-amount {
-  color: #28a745; /* Green color */
+  color: #28a745; /* Green color *
   font-weight: bold;
 }
 
-/* Form styles */
+/* Form styles *
 .form-group {
   margin-bottom: 15px;
 }
@@ -1277,7 +1277,7 @@ body {
   margin-top: 5px;
 }
 
-/* Button styles */
+/* Button styles *
 .btn-primary {
   width: 100%;
   padding: 12px;
@@ -1296,9 +1296,37 @@ body {
 }
 
 /* Info text */
-.withdraw-info {
+/*.withdraw-info {
   margin-top: 15px;
   font-size: 0.9em;
   color: #666;
   line-height: 1.5;
-    }
+    }*/
+
+.method-tabs {
+  display: flex;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #e1e1e1;
+}
+
+.method-tabs .tab {
+  padding: 10px 20px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  color: #666;
+  border-bottom: 2px solid transparent;
+}
+
+.method-tabs .tab.active {
+  color: #000;
+  border-bottom: 2px solid #0070ba;
+}
+
+.usd-conversion {
+  color: #28a745;
+  font-size: 0.9em;
+  margin-top: 5px;
+  font-weight: bold;
+}
