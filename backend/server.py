@@ -4,10 +4,6 @@ from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List, Dict, Any
-# Add these imports at the top
-import paypalrestsdk
-from typing import Optional
-from decimal import Decimal
 import os
 import uuid
 import bcrypt
@@ -101,13 +97,6 @@ class UpdateWithdrawalStatus(BaseModel):
 
 class UpdateTaskStatus(BaseModel):
     is_active: bool
-
-
-# Add to your Pydantic models
-class PayPalWithdrawalRequest(BaseModel):
-    amount: float  # KES amount
-    email: EmailStr  # PayPal email
-    original_kes: float  # Original KES amount for record keeping
 
 # Utility functions
 def hash_password(password: str) -> str:
@@ -799,110 +788,6 @@ async def mark_notification_read(notification_id: str, current_user: dict = Depe
     )
     return {"success": True, "message": "Notification marked as read"}
 
-
-
-
-# Configure PayPal (add with other configs)
-paypalrestsdk.configure({
-    "mode": os.getenv('PAYPAL_MODE', 'sandbox'),  # sandbox or live
-    "client_id": os.environ.get('PAYPAL_CLIENT_ID'),
-    "client_secret": os.environ.get('PAYPAL_SECRET')
-})
-
-
-# Add this endpoint with your other payment routes
-@app.post("/api/payments/paypal-withdraw")
-async def paypal_withdraw(
-    withdrawal_data: PayPalWithdrawalRequest,
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Process PayPal withdrawal request
-    Minimum withdrawal: 1000 KES (~$7.70)
-    """
-    MIN_WITHDRAWAL = 1000  # 1000 KES minimum
-    KSH_TO_USD_RATE = Decimal('0.0077')  # Precise decimal conversion
-    
-    try:
-        # Validate amount
-        if withdrawal_data.original_kes < MIN_WITHDRAWAL:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Minimum PayPal withdrawal is KSH {MIN_WITHDRAWAL}"
-            )
-
-        # Check user balance
-        if current_user['wallet_balance'] < withdrawal_data.original_kes:
-            raise HTTPException(
-                status_code=400,
-                detail="Insufficient balance for withdrawal"
-            )
-
-        # Create PayPal payout
-        payout = paypalrestsdk.Payout({
-            "sender_batch_header": {
-                "sender_batch_id": f"WITHDRAW_{datetime.now().timestamp()}",
-                "email_subject": "Your EarnPlatform Withdrawal"
-            },
-            "items": [
-                {
-                    "recipient_type": "EMAIL",
-                    "amount": {
-                        "value": f"{withdrawal_data.amount:.2f}",
-                        "currency": "USD"
-                    },
-                    "receiver": withdrawal_data.email,
-                    "note": "Withdrawal from EarnPlatform",
-                    "sender_item_id": f"WD_{current_user['user_id']}"
-                }
-            ]
-        })
-
-        if not payout.create():
-            raise HTTPException(
-                status_code=400,
-                detail=payout.error
-            )
-
-        # Update user balance
-        new_balance = current_user['wallet_balance'] - withdrawal_data.original_kes
-        await db.users.update_one(
-            {"user_id": current_user['user_id']},
-            {
-                "$set": {"wallet_balance": new_balance},
-                "$inc": {"total_withdrawn": withdrawal_data.original_kes}
-            }
-        )
-
-        # Record transaction
-        transaction = {
-            "transaction_id": payout.batch_header.payout_batch_id,
-            "user_id": current_user['user_id'],
-            "type": "withdrawal",
-            "amount": withdrawal_data.original_kes,
-            "usd_amount": withdrawal_data.amount,
-            "method": "paypal",
-            "status": "completed",
-            "recipient": withdrawal_data.email,
-            "created_at": datetime.utcnow(),
-            "completed_at": datetime.utcnow()
-        }
-        await db.transactions.insert_one(transaction)
-
-        return {
-            "success": True,
-            "message": f"${withdrawal_data.amount:.2f} sent to PayPal",
-            "payout_id": payout.batch_header.payout_batch_id,
-            "new_balance": new_balance
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"PayPal withdrawal failed: {str(e)}"
-        )
 # Settings
 @app.put("/api/settings/theme")
 async def update_theme(theme: str, current_user: dict = Depends(get_current_user)):
