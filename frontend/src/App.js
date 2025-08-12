@@ -1,4 +1,4 @@
-import React, { useState, useEffect, createContext, useContext, useRef } from 'react';
+import React, { useState, useEffect, createContext, useContext } from 'react';
 import './App.css';
 
 // Context for global state management
@@ -474,29 +474,28 @@ const DepositModal = ({ isOpen, onClose, onDeposit }) => {
 };
 
 const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
-  // Existing M-Pesa state (keep all your current state)
   const [amount, setAmount] = useState('');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const { showNotification } = useAppContext();
 
-  // New PayPal state (add these lines)
-  const [paypalEmail, setPaypalEmail] = useState(user.paypal_email || '');
-  const [activeMethod, setActiveMethod] = useState('mpesa'); // 'mpesa' or 'paypal'
-  const paypalContainerRef = useRef(null);
-
-  // Constants for PayPal
-  const KSH_TO_USD = 0.0077;
-  const MIN_PAYPAL = 1000; // 1000 KES minimum for PayPal
-  const usdAmount = (user.wallet_balance * KSH_TO_USD).toFixed(2);
-
-  // 1. Your Existing M-Pesa Handler (DO NOT MODIFY)
-  const handleMpesaWithdraw = async (e) => {
+  const handleWithdraw = async (e) => {
     e.preventDefault();
     setLoading(true);
 
     try {
       const token = localStorage.getItem('token');
+      console.log('WithdrawModal - Token from localStorage:', token); // LOG
+      if (!token) {
+        showNotification({
+          title: 'Error',
+          message: 'Authentication token not found. Please log in again.',
+          type: 'error'
+        });
+        setLoading(false);
+        return; // Exit if no token
+      }
+
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/payments/withdraw`, {
         method: 'POST',
         headers: {
@@ -510,6 +509,8 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
       });
 
       const data = await response.json();
+      console.log('Withdraw response data:', data); // LOG
+
       if (data.success) {
         showNotification({
           title: 'Withdrawal Requested!',
@@ -526,6 +527,7 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
         });
       }
     } catch (error) {
+      console.error('Network error during withdrawal:', error); // LOG
       showNotification({
         title: 'Error',
         message: 'Network error. Please try again.',
@@ -536,62 +538,6 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
     }
   };
 
-  // 2. New PayPal Handlers (ADD THESE NEW FUNCTIONS)
-  const handlePaypalEmailSave = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/users/update-paypal`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ paypal_email: paypalEmail })
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        setActiveMethod('paypal-withdraw');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // PayPal Button Effect
-  useEffect(() => {
-    if (activeMethod !== 'paypal-withdraw') return;
-
-    const script = document.createElement('script');
-    script.src = `https://www.paypal.com/sdk/js?client-id=${process.env.REACT_APP_PAYPAL_CLIENT_ID}&currency=USD`;
-    script.async = true;
-
-    script.onload = () => {
-      window.paypal.Buttons({
-        createOrder: () => {
-          return fetch(`${process.env.REACT_APP_BACKEND_URL}/api/payments/paypal-create`, {
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-          }).then(res => res.json()).then(data => data.id);
-        },
-        onApprove: () => {
-          showNotification({
-            title: 'Success!',
-            message: `$${usdAmount} sent to PayPal`,
-            type: 'success'
-          });
-          onWithdraw();
-          onClose();
-        }
-      }).render(paypalContainerRef.current);
-    };
-
-    document.body.appendChild(script);
-    return () => document.body.removeChild(script);
-  }, [activeMethod]);
-
   if (!isOpen) return null;
 
   return (
@@ -601,137 +547,44 @@ const WithdrawModal = ({ isOpen, onClose, user, onWithdraw }) => {
           <h3>💸 Withdraw Money</h3>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
-
-        //{/* Add Method Selector (NEW) */}
-        <div style={{
-          display: 'flex',
-          marginBottom: '20px',
-          borderBottom: '1px solid #eee'
-        }}>
-          <button
-            style={{
-              flex: 1,
-              padding: '10px',
-              background: 'none',
-              border: 'none',
-              borderBottom: activeMethod === 'mpesa' ? '2px solid #0070ba' : 'none',
-              cursor: 'pointer'
-            }}
-            onClick={() => setActiveMethod('mpesa')}
-          >
-            M-Pesa
-          </button>
-          <button
-            style={{
-              flex: 1,
-              padding: '10px',
-              background: 'none',
-              border: 'none',
-              borderBottom: activeMethod.startsWith('paypal') ? '2px solid #0070ba' : 'none',
-              cursor: 'pointer'
-            }}
-            onClick={() => setActiveMethod('paypal')}
-          >
-            PayPal
-          </button>
-        </div>
-
-       // {/* Existing M-Pesa Form (UNCHANGED) */}
-        {activeMethod === 'mpesa' && (
-          <form onSubmit={handleMpesaWithdraw}>
-            <div className="form-group">
-              <label>Amount (KES)</label>
-              <input
-                type="number"
-                min="100"
-                max={user.wallet_balance}
-                step="0.01"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                required
-                className="form-input"
-              />
-              <small>Available: KSH {user.wallet_balance.toFixed(2)} | Minimum: KSH 100</small>
-            </div>
-            
-            <div className="form-group">
-              <label>M-Pesa Phone Number</label>
-              <input
-                type="tel"
-                placeholder="254XXXXXXXXX"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                required
-                className="form-input"
-              />
-            </div>
-
-            <div className="withdraw-info">
-              <p>⏳ Processing time: 24-48 hours</p>
-              <p>💰 Money will be sent to your M-Pesa account</p>
-            </div>
-
-            <button type="submit" className="btn-primary" disabled={loading}>
-              {loading ? 'Processing...' : 'Request Withdrawal'}
-            </button>
-          </form>
-        )}
-
-       // {/* New PayPal Forms (ADD THIS SECTION) */}
-        {activeMethod === 'paypal' && !user.paypal_email && (
-          <form onSubmit={handlePaypalEmailSave}>
-            <div className="form-group">
-              <label>PayPal Email Address</label>
-              <input
-                type="email"
-                placeholder="your@paypal.email"
-                value={paypalEmail}
-                onChange={(e) => setPaypalEmail(e.target.value)}
-                required
-                className="form-input"
-              />
-            </div>
-            <button type="submit" className="btn-primary" disabled={loading}>
-              {loading ? 'Saving...' : 'Continue to PayPal'}
-            </button>
-          </form>
-        )}
-
-        {activeMethod === 'paypal-withdraw' && (
-          <div>
-            <div className="form-group">
-              <label>PayPal Withdrawal</label>
-              <div style={{
-                padding: '10px',
-                background: '#f8f8f8',
-                borderRadius: '4px',
-                marginBottom: '15px'
-              }}>
-                {user.paypal_email || paypalEmail}
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label>Amount</label>
-              <div style={{
-                padding: '10px',
-                background: '#f8f8f8',
-                borderRadius: '4px',
-                marginBottom: '15px'
-              }}>
-                ${usdAmount} USD (≈ KSH {user.wallet_balance.toFixed(2)})
-              </div>
-            </div>
-
-            {user.wallet_balance >= MIN_PAYPAL ? (
-              <div ref={paypalContainerRef} />
-            ) : (
-              <div style={{ color: '#ff4d4f', textAlign: 'center', margin: '15px 0' }}>
-                Minimum PayPal withdrawal is KSH {MIN_PAYPAL}
-              </div>
-            )}
+        
+        <form onSubmit={handleWithdraw}>
+          <div className="form-group">
+            <label>Amount (KSH)</label>
+            <input
+              type="number"
+              min="100"
+              max={user.wallet_balance}
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              required
+              className="form-input"
+            />
+            <small>Available: KSH {user.wallet_balance.toFixed(2)} | Minimum: KSH 100</small>
           </div>
-        )}
+          
+          <div className="form-group">
+            <label>M-Pesa Phone Number</label>
+            <input
+              type="tel"
+              placeholder="254XXXXXXXXX"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              required
+              className="form-input"
+            />
+          </div>
+
+          <div className="withdraw-info">
+            <p>⏳ Processing time: 24-48 hours</p>
+            <p>💰 Money will be sent to your M-Pesa account</p>
+          </div>
+
+          <button type="submit" className="btn-primary" disabled={loading}>
+            {loading ? 'Processing...' : 'Request Withdrawal'}
+          </button>
+        </form>
       </div>
     </div>
   );
