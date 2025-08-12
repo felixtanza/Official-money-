@@ -226,60 +226,160 @@ async def register(user_data: UserRegister):
             referred_by = referrer['user_id']
     
     # Create user
-    user_doc = {
+    # Create user with enhanced validation and payment integration
+user_doc = {
+    "user_id": user_id,
+    "email": user_data.email.lower().strip(),  # Normalize email
+    "password": hash_password(user_data.password),
+    "full_name": user_data.full_name.strip(),
+    "phone": validate_and_format_phone(user_data.phone),  # Custom phone validation
+    "referral_code": referral_code,
+    "referred_by": referred_by,
+    "wallet_balance": Decimal('0.00'),  # Using Decimal for precise money handling
+    "is_activated": False,
+    "activation_amount": Decimal('500.00'),  # KSH 500 activation fee
+    "total_earned": Decimal('0.00'),
+    "total_withdrawn": Decimal('0.00'),
+    "referral_earnings": Decimal('0.00'),
+    "task_earnings": Decimal('0.00'),
+    "referral_count": 0,
+    "payment_methods": {  # Track connected payment methods
+        "mpesa": {
+            "phone": None,
+            "verified": False
+        },
+        "paypal": {
+            "email": None,
+            "verified": False
+        }
+    },
+    "security": {
+        "two_factor_enabled": False,
+        "last_password_change": datetime.utcnow()
+    },
+    "created_at": datetime.utcnow(),
+    "updated_at": datetime.utcnow(),
+    "last_login": datetime.utcnow(),
+    "notifications_enabled": True,
+    "communication_preferences": {
+        "email": True,
+        "sms": True,
+        "push": True
+    },
+    "theme": "light",
+    "role": user_data.role.lower() if user_data.role else "user",  # Normalize role
+    "status": "active",  # active, suspended, deleted
+    "verification": {
+        "email_verified": False,
+        "phone_verified": False,
+        "identity_verified": False
+    }
+}
+
+# Validate phone number format
+def validate_and_format_phone(phone: str) -> str:
+    """Convert phone to international format (254...) and validate"""
+    phone = phone.strip().replace(" ", "").replace("-", "").replace("+", "")
+    
+    if phone.startswith("0") and len(phone) == 10:
+        return "254" + phone[1:]
+    elif phone.startswith("254") and len(phone) == 12:
+        return phone
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid phone number format. Use 07... or 2547..."
+        )
+
+# Start a MongoDB session for atomic operations
+async with await client.start_session() as session:
+    try:
+        async with session.start_transaction():
+            # Insert user document
+            await db.users.insert_one(user_doc, session=session)
+            
+            # Create referral tracking if referred
+            if referred_by:
+                referral_doc = {
+                    "referral_id": str(uuid.uuid4()),
+                    "referrer_id": referred_by,
+                    "referred_id": user_id,
+                    "status": "pending",
+                    "created_at": datetime.utcnow(),
+                    "activation_date": None,
+                    "reward_amount": Decimal('50.00'),
+                    "currency": "KES"
+                }
+                await db.referrals.insert_one(referral_doc, session=session)
+                
+                # Increment referrer's referral count
+                await db.users.update_one(
+                    {"user_id": referred_by},
+                    {"$inc": {"referral_count": 1}},
+                    session=session
+                )
+            
+            # Create initial wallet transaction record
+            transaction_doc = {
+                "transaction_id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "type": "account_creation",
+                "amount": Decimal('0.00'),
+                "currency": "KES",
+                "status": "completed",
+                "description": "Initial account creation",
+                "created_at": datetime.utcnow(),
+                "completed_at": datetime.utcnow()
+            }
+            await db.transactions.insert_one(transaction_doc, session=session)
+            
+            # Send verification email/sms
+            await send_verification_email(user_doc["email"], user_id)
+            await send_verification_sms(user_doc["phone"])
+            
+    except Exception as e:
+        await session.abort_transaction()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Registration failed: {str(e)}"
+        )
+
+# Generate JWT token
+token = create_jwt_token(
+    user_id=user_id,
+    email=user_data.email,
+    role=user_doc["role"],
+    is_activated=user_doc["is_activated"]
+)
+
+# Return response with sanitized user data
+return {
+    "success": True,
+    "message": "Registration successful! Please deposit KSH 500 to activate your account.",
+    "token": token,
+    "user": {
         "user_id": user_id,
         "email": user_data.email,
-        "password": hash_password(user_data.password),
         "full_name": user_data.full_name,
-        "phone": user_data.phone,
         "referral_code": referral_code,
-        "referred_by": referred_by,
-        "wallet_balance": 0.0,
         "is_activated": False,
-        "activation_amount": 500.0,  # KSH 500 activation fee
-        "total_earned": 0.0,
-        "total_withdrawn": 0.0,
-        "referral_earnings": 0.0,
-        "task_earnings": 0.0,
-        "referral_count": 0,
-        "created_at": datetime.utcnow(),
-        "last_login": datetime.utcnow(),
-        "notifications_enabled": True,
-        "theme": "light",
-        "role": user_data.role # Set user role
+        "wallet_balance": "0.00",
+        "currency": "KES",
+        "role": user_doc["role"],
+        "has_payment_methods": False,
+        "verification_status": {
+            "email": False,
+            "phone": False
+        }
+    },
+    "next_steps": [
+        "verify_email",
+        "verify_phone",
+        "add_payment_method",
+        "make_activation_deposit"
+    ]
     }
-    
-    await db.users.insert_one(user_doc)
-    
-    # Create referral tracking if referred
-    if referred_by:
-        await db.referrals.insert_one({
-            "referral_id": str(uuid.uuid4()),
-            "referrer_id": referred_by,
-            "referred_id": user_id,
-            "status": "pending",  # pending -> activated -> rewarded
-            "created_at": datetime.utcnow(),
-            "activation_date": None,
-            "reward_amount": 50.0  # KSH 50 referral bonus
-        })
-    
-    token = create_jwt_token(user_id, user_data.email, user_data.role) # Pass role to token creation
-    
-    # Return serializable user data
-    return {
-        "success": True,
-        "message": "Registration successful! Please deposit KSH 500 to activate your account.",
-        "token": token,
-        "user": json_serializable_doc({
-            "user_id": user_id,
-            "email": user_data.email,
-            "full_name": user_data.full_name,
-            "referral_code": referral_code,
-            "is_activated": False,
-            "wallet_balance": 0.0,
-            "role": user_data.role # Return role in user object
-        })
-    }
+   
 
 @app.post("/api/auth/login")
 async def login(user_data: UserLogin):
