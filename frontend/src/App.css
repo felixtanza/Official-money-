@@ -1330,3 +1330,55 @@ body {
   margin-top: 5px;
   font-weight: bold;
 }
+.payment-method-selector {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.payment-method-btn {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.payment-method-btn.active {
+  border-color: #0066cc;
+  box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.2);
+}
+
+.payment-method-btn img {
+  display: block;
+  height: auto;
+}
+
+.exchange-note {
+  display: block;
+  margin-top: 5px;
+  color: #666;
+  font-size: 0.8em;
+}
+
+.paypal-disclaimer {
+  margin-top: 15px;
+  padding: 10px;
+  background: #f8f8f8;
+  border-radius: 5px;
+  font-size: 0.8em;
+  color: #555;
+}
+
+.deposit-info {
+  margin: 15px 0;
+  padding: 10px;
+  background: #f0f8ff;
+  border-radius: 5px;
+}
+
+.deposit-info p {
+  margin: 5px 0;
+  font-size: 0.9em;
+  }
