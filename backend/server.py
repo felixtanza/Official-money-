@@ -415,56 +415,186 @@ async def login(user_data: UserLogin):
 # Dashboard routes
 @app.get("/api/dashboard/stats")
 async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
+    """
+    Enhanced Dashboard Statistics with:
+    - Parallel data fetching
+    - Comprehensive analytics
+    - Activity timeline
+    - Performance optimizations
+    - Tiered referral rewards
+    """
     user_id = current_user['user_id']
     
-    # Get recent transactions
-    transactions = await db.transactions.find(
-        {"user_id": user_id}
-    ).sort("created_at", -1).limit(10).to_list(10)
+    try:
+        # Fetch all data in parallel for better performance
+        transactions_task = db.transactions.find(
+            {"user_id": user_id}
+        ).sort("created_at", -1).limit(10).to_list(None)
+        
+        referrals_task = db.referrals.aggregate([
+            {"$match": {"referrer_id": user_id}},
+            {"$group": {
+                "_id": "$status",
+                "count": {"$sum": 1},
+                "total_reward": {"$sum": "$reward_amount"},
+                "potential_reward": {
+                    "$sum": {
+                        "$cond": [
+                            {"$eq": ["$status", "pending"]},
+                            "$reward_amount",
+                            0
+                        ]
+                    }
+                }
+            }},
+            {"$group": {
+                "_id": None,
+                "stats": {"$push": "$$ROOT"},
+                "total_referrals": {"$sum": "$count"},
+                "total_earned": {"$sum": "$total_reward"},
+                "potential_earnings": {"$sum": "$potential_reward"}
+            }}
+        ]).to_list(None)
+        
+        notifications_task = db.notifications.find(
+            {"$or": [
+                {"user_id": user_id},
+                {"user_id": None, "type": "broadcast"}
+            ]}
+        ).sort("created_at", -1).limit(10).to_list(None)
+        
+        tasks_task = db.task_completions.aggregate([
+            {"$match": {"user_id": user_id}},
+            {"$group": {
+                "_id": "$status",
+                "count": {"$sum": 1},
+                "total_earnings": {"$sum": "$reward"}
+            }}
+        ]).to_list(None)
+        
+        # Execute all queries concurrently
+        transactions, referrals, notifications, tasks = await asyncio.gather(
+            transactions_task,
+            referrals_task,
+            notifications_task,
+            tasks_task
+        )
+        
+        # Calculate weekly earnings
+        weekly_earnings = await db.transactions.aggregate([
+            {"$match": {
+                "user_id": user_id,
+                "type": {"$in": ["task", "referral"]},
+                "status": "completed",
+                "created_at": {
+                    "$gte": datetime.utcnow() - timedelta(days=7)
+                }
+            }},
+            {"$group": {
+                "_id": None,
+                "total": {"$sum": "$amount"}
+            }}
+        ]).to_list(None)
+        
+        # Determine referral tier
+        referral_count = referrals[0]['total_referrals'] if referrals else 0
+        tier = "gold" if referral_count >= 50 else \
+               "silver" if referral_count >= 20 else "bronze"
+        
+        # Prepare response
+        response = {
+            "success": True,
+            "user": {
+                "full_name": current_user['full_name'],
+                "wallet_balance": float(current_user['wallet_balance']),
+                "is_activated": current_user['is_activated'],
+                "activation_amount": float(current_user.get('activation_amount', 500.0)),
+                "total_earned": float(current_user.get('total_earned', 0.0)),
+                "total_withdrawn": float(current_user.get('total_withdrawn', 0.0)),
+                "referral_earnings": float(current_user.get('referral_earnings', 0.0)),
+                "task_earnings": float(current_user.get('task_earnings', 0.0)),
+                "referral_count": current_user.get('referral_count', 0),
+                "referral_code": current_user['referral_code'],
+                "referral_tier": tier,
+                "role": current_user.get('role', 'user')
+            },
+            "analytics": {
+                "weekly_earnings": float(weekly_earnings[0]['total']) if weekly_earnings else 0,
+                "referrals": referrals[0] if referrals else {
+                    "stats": [],
+                    "total_referrals": 0,
+                    "total_earned": 0,
+                    "potential_earnings": 0
+                },
+                "tasks": {
+                    "completed": next(
+                        (t['count'] for t in tasks if t['_id'] == "completed"), 0),
+                    "pending": next(
+                        (t['count'] for t in tasks if t['_id'] == "pending"), 0),
+                    "total_earnings": next(
+                        (t['total_earnings'] for t in tasks if t['_id'] == "completed"), 0)
+                }
+            },
+            "activity": {
+                "transactions": json_serializable_doc(transactions),
+                "notifications": json_serializable_doc(notifications)
+            },
+            "quick_actions": await generate_quick_actions(current_user)
+        }
+        
+        return response
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load dashboard: {str(e)}"
+        )
+
+async def generate_quick_actions(user: dict) -> list:
+    """Generate context-aware quick actions"""
+    actions = []
     
-    # Get referral stats
-    referral_stats = await db.referrals.aggregate([
-        {"$match": {"referrer_id": user_id}},
-        {"$group": {
-            "_id": "$status",
-            "count": {"$sum": 1},
-            "total_reward": {"$sum": "$reward_amount"}
-        }}
-    ]).to_list(10)
+    if not user['is_activated']:
+        actions.append({
+            "title": "Activate Account",
+            "description": f"Deposit KSH {user.get('activation_amount', 500)} to activate",
+            "action": "deposit",
+            "priority": "high"
+        })
     
-    # Get notifications
-    notifications = await db.notifications.find(
-        {"$or": [{"user_id": user_id}, {"user_id": None}]}
-    ).sort("created_at", -1).limit(5).to_list(5)
+    if user.get('referral_count', 0) < 5:
+        actions.append({
+            "title": "Earn More",
+            "description": "Invite friends to earn bonuses",
+            "action": "invite",
+            "priority": "medium"
+        })
     
-    # Apply serialization helper to all fetched data
-    serialized_transactions = json_serializable_doc(transactions)
-    serialized_referral_stats = json_serializable_doc(referral_stats)
-    serialized_notifications = json_serializable_doc(notifications)
+    if user['wallet_balance'] >= 200:
+        actions.append({
+            "title": "Withdraw Earnings",
+            "description": "Cash out your balance",
+            "action": "withdraw",
+            "priority": "medium"
+        })
     
-    # The current_user object also needs to be serialized before returning
-    # Pass a copy to avoid modifying the original dictionary that might be used elsewhere
-    serialized_current_user = json_serializable_doc(current_user.copy()) 
-    
-    return {
-        "success": True,
-        "user": {
-            "full_name": serialized_current_user['full_name'],
-            "wallet_balance": serialized_current_user['wallet_balance'],
-            "is_activated": serialized_current_user['is_activated'],
-            "activation_amount": serialized_current_user.get('activation_amount', 500.0),
-            "total_earned": serialized_current_user.get('total_earned', 0.0),
-            "total_withdrawn": serialized_current_user.get('total_withdrawn', 0.0),
-            "referral_earnings": serialized_current_user.get('referral_earnings', 0.0),
-            "task_earnings": serialized_current_user.get('task_earnings', 0.0),
-            "referral_count": serialized_current_user.get('referral_count', 0),
-            "referral_code": serialized_current_user['referral_code'],
-            "role": serialized_current_user.get('role', 'user')
+    # Add default actions
+    actions.extend([
+        {
+            "title": "Complete Tasks",
+            "description": "Earn money by completing tasks",
+            "action": "tasks",
+            "priority": "low"
         },
-        "recent_transactions": serialized_transactions,
-        "referral_stats": serialized_referral_stats,
-        "notifications": serialized_notifications
-    }
+        {
+            "title": "View Tutorial",
+            "description": "Learn how to maximize earnings",
+            "action": "tutorial",
+            "priority": "low"
+        }
+    ])
+    
+    return actions
 
 # Payment routes
 
